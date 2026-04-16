@@ -1,7 +1,5 @@
 (function() {
-// 1. Configuration (Uses centralized firebase-config.js)
-const db = firebase.firestore();
-
+// 2. App State
 const state = {
     user: { name: 'O\'quvchi', id: 'guest' },
     currentPage: 'dashboard',
@@ -63,7 +61,7 @@ async function initStudentPanel() {
         
         renderStudentLayout();
         showLoading();
-        await loadCloudData();
+        await loadLocalData();
         setupNavigation();
         setupThemeToggle();
         updateHeaderStats();
@@ -76,42 +74,53 @@ async function initStudentPanel() {
     }
 }
 
-async function loadCloudData() {
-    // 1. Load global topics from admin settings
-    const adminDoc = await db.collection('settings').doc('admin_v1').get();
-    if (adminDoc.exists) {
-        const data = adminDoc.data();
-        state.topics = data.topics || [];
-        state.materials = data.materials || {};
-    }
+async function loadLocalData() {
+    try {
+        // 1. Load global topics from content.js or simulated admin state
+        const adminDataRaw = localStorage.getItem('mq_admin_v2');
+        if (adminDataRaw) {
+            const adminData = JSON.parse(adminDataRaw);
+            state.topics = adminData.topics || [];
+            state.materials = adminData.materials || {};
+        } else {
+            state.topics = (typeof initialTopics !== 'undefined' ? initialTopics : []);
+            state.materials = {};
+        }
 
-    // 2. Load student-specific progress
-    const studentId = authState.user.uid;
-    const studentDoc = await db.collection('students').doc(String(studentId)).get();
-    if (studentDoc.exists) {
-        const data = studentDoc.data();
-        state.xp = data.xp || 0;
-        state.level = data.level || 1;
-        state.streak = data.streak || 0;
-        state.progress = data.progress || {};
-        state.unlockedTopics = data.unlockedTopics || [];
-    } else {
-        // New student initialization
-        state.unlockedTopics = state.topics.length > 0 ? [state.topics[0].id] : [];
-        await saveCloudData();
+        // 2. Load student-specific progress
+        const studentId = authState.user.uid;
+        const studentDataRaw = localStorage.getItem(`mq_student_v2_${studentId}`);
+        if (studentDataRaw) {
+            const data = JSON.parse(studentDataRaw);
+            state.xp = data.xp || 0;
+            state.level = data.level || 1;
+            state.streak = data.streak || 0;
+            state.progress = data.progress || {};
+            state.unlockedTopics = data.unlockedTopics || [];
+        } else {
+            // New student initialization
+            state.unlockedTopics = state.topics.length > 0 ? [state.topics[0].id] : [];
+            await saveLocalData();
+        }
+    } catch(e) {
+        console.error("Local load error", e);
     }
 }
 
-async function saveCloudData() {
-    const studentId = authState.user.uid;
-    await db.collection('students').doc(String(studentId)).set({
-        xp: state.xp,
-        level: state.level,
-        streak: state.streak,
-        progress: state.progress,
-        unlockedTopics: state.unlockedTopics,
-        name: authState.user.email.split('@')[0]
-    });
+async function saveLocalData() {
+    try {
+        const studentId = authState.user.uid;
+        localStorage.setItem(`mq_student_v2_${studentId}`, JSON.stringify({
+            xp: state.xp,
+            level: state.level,
+            streak: state.streak,
+            progress: state.progress,
+            unlockedTopics: state.unlockedTopics,
+            name: authState.user.email ? authState.user.email.split('@')[0] : 'Student'
+        }));
+    } catch(e) {
+        console.error("Local save error", e);
+    }
 }
 
 function renderStudentLayout() {

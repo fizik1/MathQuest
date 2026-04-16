@@ -1,8 +1,4 @@
 (function() {
-// 1. Configuration (Uses centralized firebase-config.js)
-// firebase.initializeApp(firebaseConfig); // Handled by auth.js or index.html
-const db = firebase.firestore();
-
 // 2. App State
 const state = {
     user: { name: 'Admin', id: 'admin' },
@@ -50,7 +46,7 @@ async function initAdminPanel() {
         
         renderAdminLayout();
         showLoading();
-        await loadCloudData();
+        await loadLocalData();
         setupNavigation();
         setupThemeToggle();
         updateHeaderStats();
@@ -100,77 +96,32 @@ function renderAdminLayout() {
 }
 window.initAdminPanel = initAdminPanel;
 
-async function loadCloudData() {
+async function loadLocalData() {
     try {
-        const doc = await db.collection('settings').doc('admin_v1').get();
-        if (doc.exists) {
-            const data = doc.data();
+        console.log("Loading data from LocalStorage...");
+        const localDataRaw = localStorage.getItem('mq_admin_v2');
+        if (localDataRaw) {
+            const data = JSON.parse(localDataRaw);
             state.xp = data.xp || 0;
             state.level = data.level || 1;
             state.streak = data.streak || 0;
             state.progress = data.progress || {};
             state.unlockedTopics = data.unlockedTopics || [];
-            state.topics = data.topics || [];
+            state.topics = data.topics || (typeof initialTopics !== 'undefined' ? initialTopics : []);
             state.materials = data.materials || {};
-        }
-
-        // Migration check: if cloud is empty, check for local data
-        if (state.topics.length === 0) {
-            const keys = ['mathquest_admin_v1', 'mathquest_v1', 'mathquest_data'];
-            for (let key of keys) {
-                const localDataRaw = localStorage.getItem(key);
-                if (localDataRaw) {
-                    try {
-                        const localData = JSON.parse(localDataRaw);
-                        // Is it a state object or just a topics array?
-                        const topicsToMigrate = localData.topics || (Array.isArray(localData) ? localData : null);
-                        
-                        if (topicsToMigrate && topicsToMigrate.length > 0) {
-                            console.log(`Migration: Found data in ${key}. Restoring...`);
-                            state.topics = topicsToMigrate;
-                            state.xp = localData.xp || state.xp;
-                            state.level = localData.level || state.level;
-                            state.materials = localData.materials || state.materials || {};
-                            state.unlockedTopics = localData.unlockedTopics || state.topics.map(t => t.id);
-                            
-                            await saveCloudData();
-                            alert(`Eski mavzularingiz (${key}) topildi va yuklandi! 🔥✅`);
-                            renderTopics();
-                            return; 
-                        }
-                    } catch (e) {
-                        console.error(`Migration error for key ${key}:`, e);
-                    }
-                }
-            }
-            
-            // DEEP SCAN: If still empty, scan EVERYTHING in localStorage for anything resembling topics
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                if (key.includes('mathquest') || key.includes('admin') || key.includes('state')) {
-                    const val = localStorage.getItem(key);
-                    try {
-                        const parsed = JSON.parse(val);
-                        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].id && parsed[0].title) {
-                            console.log("Deep scan found topics in key:", key);
-                            state.topics = parsed;
-                            await saveCloudData();
-                            alert("Deep Scan: Mavzular topildi! ✅");
-                            renderTopics();
-                            return;
-                        }
-                    } catch(e) {}
-                }
-            }
+        } else {
+            // Default to content.js if no local data
+            state.topics = (typeof initialTopics !== 'undefined' ? JSON.parse(JSON.stringify(initialTopics)) : []);
+            state.unlockedTopics = state.topics.map(t => t.id);
         }
     } catch (e) {
-        console.error("Cloud load error", e);
+        console.error("Local load error", e);
     }
 }
 
-async function saveCloudData() {
+async function saveLocalData() {
     try {
-        await db.collection('settings').doc('admin_v1').set({
+        localStorage.setItem('mq_admin_v2', JSON.stringify({
             xp: state.xp,
             level: state.level,
             streak: state.streak,
@@ -178,14 +129,37 @@ async function saveCloudData() {
             unlockedTopics: state.unlockedTopics,
             topics: state.topics,
             materials: state.materials
-        });
+        }));
         updateSyncTime();
     } catch (e) {
-        console.error("Cloud save error", e);
-        alert("Xatolik: Ma'lumotlarni bulutga saqlab bo'lmadi. ❌\nIltimos, internet aloqasini yoki Firebase qoidalarini tekshiring.");
-        throw e;
+        console.error("Local save error", e);
     }
 }
+
+function exportToGithub() {
+    const data = {
+        topics: state.topics,
+        materials: state.materials
+    };
+    const blob = JSON.stringify(data, null, 4);
+    
+    // Simple way to show the data to the user
+    const modal = document.createElement('div');
+    modal.style = "position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:10000; display:flex; align-items:center; justify-content:center; padding:2rem;";
+    modal.innerHTML = `
+        <div class="card" style="max-width:800px; width:100%; max-height:90vh; overflow-y:auto; padding:2rem;">
+            <h2 style="margin-bottom:1rem;">GitHub'ga yuklash uchun kod 🚀</h2>
+            <p style="margin-bottom:1.5rem; color:var(--text-muted);">Quyidagi kodni nusxalang va Antigravity'ga yuboring. Men uni GitHub'ga yuklab qo'yaman.</p>
+            <textarea id="export-code" style="width:100%; height:300px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); border-radius:8px; padding:1rem; font-family:monospace; margin-bottom:1.5rem;">${blob}</textarea>
+            <div style="display:flex; gap:1rem; justify-content:flex-end;">
+                <button class="primary-btn" style="background:var(--border); color:var(--text-main)" onclick="this.closest('div').parentElement.parentElement.remove()">Yopish</button>
+                <button class="primary-btn" onclick="document.getElementById('export-code').select(); document.execCommand('copy'); alert('Kod nusxalandi! Endi uni Antigravityga yuboring.')">Nusxalash</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+window.exportToGithub = exportToGithub;
 
 function updateSyncTime() {
     const el = document.getElementById('sync-time');
@@ -204,7 +178,7 @@ async function removeTopic(topicId) {
         delete state.progress[topicId];
         
         try {
-            await saveCloudData();
+            await saveLocalData();
             hideLoading();
             renderTopics();
             alert("Mavzu muvaffaqiyatli o'chirildi! 🗑️");
@@ -228,7 +202,7 @@ async function restoreFromClipboard() {
                 state.materials = parsed.materials || {};
                 state.unlockedTopics = parsed.unlockedTopics || state.topics.map(t => t.id);
                 
-                await saveCloudData();
+                await saveLocalData();
                 alert("Ma'lumotlar muvaffaqiyatli saqlandi! ✅");
                 renderTopics();
             } else {
@@ -301,7 +275,7 @@ async function addXP(amount) {
         alert(`Tabriklaymiz! Siz ${newLevel}-darajaga chiqdingiz! 🎊`);
     }
     updateHeaderStats();
-    await saveCloudData();
+    await saveLocalData();
 }
 
 // Admin Topic Management
@@ -336,7 +310,7 @@ async function addTopic() {
     }
 
     try {
-        await saveCloudData();
+        await saveLocalData();
         hideLoading();
         renderTopics();
         alert("Yangi mavzu va fayllar muvaffaqiyatli saqlandi! ✅");
@@ -387,7 +361,8 @@ function renderDashboard() {
         <div class="fade-in dashboard-view">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
                 <h1 class="view-title" style="margin:0;">Xush kelibsiz, ${state.user.name}! 👋</h1>
-                <span id="sync-time" style="font-size:0.8rem; color:var(--text-muted); background:rgba(var(--primary-rgb), 0.1); padding:0.4rem 0.8rem; border-radius:var(--radius-full);">Bulut bilan bog'langan ☁️</span>
+                <span id="sync-time" style="font-size:0.8rem; color:var(--text-muted); background:rgba(var(--primary-rgb), 0.1); padding:0.4rem 0.8rem; border-radius:var(--radius-full);">Mahalliy saqlash 📱</span>
+                <button class="primary-btn btn-sm" onclick="window.exportToGithub()" style="margin-left:1rem;">GitHub'ga yuklash 🚀</button>
             </div>
             <p class="view-subtitle">Bugungi MathQuest statistikangiz va kiritilgan ma'lumotlar:</p>
             
@@ -580,7 +555,7 @@ async function finishQuiz() {
     await addXP(earnedXP);
 
     container.innerHTML = `
-        <div class="quiz-result fade-in card text-center">
+        <div class="fade-in card text-center">
             <h1>Natija: ${finalPercent}%</h1>
             <p>${finalPercent >= 70 ? 'Ajoyib! Siz mavzuni muvaffaqiyatli topshirdingiz. 🎉' : 'Yana bir bor urinib ko\'ring! 💪'}</p>
             <div class="result-stats">
@@ -590,7 +565,7 @@ async function finishQuiz() {
             <button class="primary-btn" onclick="appNavigate('topics')">Mavzularga qaytish</button>
         </div>
     `;
-    await saveCloudData();
+    await saveLocalData();
 }
 
 function renderVideos() {
@@ -666,7 +641,7 @@ async function addVideo() {
     });
 
     try {
-        await saveCloudData();
+        await saveLocalData();
         hideLoading();
         renderVideos();
         alert("Video muvaffaqiyatli qo'shildi! 🎥✅");
@@ -830,7 +805,7 @@ async function addQuestion() {
     }
 
     try {
-        await saveCloudData();
+        await saveLocalData();
         hideLoading();
         renderMustahkamlash();
         alert("Savol muvaffaqiyatli qo'shildi! 📝✅");
@@ -914,7 +889,7 @@ async function saveTopicEdit(id) {
     }
 
     try {
-        await saveCloudData();
+        await saveLocalData();
         hideLoading();
         renderTopics();
         alert("Mavzu muvaffaqiyatli yangilandi! ✅");
@@ -929,7 +904,7 @@ async function removeMaterial(topicId, index) {
         showLoading();
         state.materials[topicId].splice(index, 1);
         try {
-            await saveCloudData();
+            await saveLocalData();
             hideLoading();
             openEditTopic(topicId); // Refresh edit view
         } catch (e) {
