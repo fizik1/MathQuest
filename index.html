@@ -13,45 +13,17 @@
 </head>
 <body class="light-theme">
     <div id="app">
-        <!-- Sidebar / Navigation -->
-        <nav class="sidebar">
-            <div class="logo">
-                <span class="logo-icon">📐</span>
-                <span class="logo-text">MathQuest Admin <span style="font-size:0.7rem; background:var(--secondary); color:white; padding:2px 6px; border-radius:10px; vertical-align:middle;">V2.0</span></span>
-            </div>
-            <ul class="nav-links">
-                <li class="active" data-page="dashboard"><span class="icon">🏠</span> <span>Asosiy</span></li>
-                <li data-page="topics"><span class="icon">📚</span> <span>Mavzular</span></li>
-                <li data-page="videos"><span class="icon">🎥</span> <span>Videolar</span></li>
-                <li data-page="mustahkamlash"><span class="icon">🧱</span> <span>Mustahkamlash</span></li>
-                <li data-page="leaderboard"><span class="icon">🏆</span> <span>Reyting</span></li>
-                <li data-page="profile"><span class="icon">👤</span> <span>Profil</span></li>
-            </ul>
-            <div class="theme-toggle" id="theme-toggle">
-                <span class="icon">🌙</span>
-            </div>
-        </nav>
-
-        <!-- Main Content Area -->
-        <main class="content">
-            <header class="top-bar">
-                <div class="mobile-menu-btn" id="mobile-menu-btn">☰</div>
-                <div class="user-profile-summary">
-                    <span id="header-username">Admin</span>
-                    <div class="header-avatar">👤</div>
-                </div>
-            </header>
-
-            <div id="view-container">
-                <!-- Views will be injected here -->
-            </div>
-        </main>
+        <!-- Content will be dynamically injected by auth.js -->
     </div>
 
-    <!-- Firebase SDKs (Compat Version for easier migration) -->
+    <!-- Firebase SDKs -->
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
     
-    <script src="src/js/main.js"></script>
+    <script src="src/js/firebase-config.js"></script>
+    <script src="src/js/admin.js"></script>
+    <script src="src/js/student.js"></script>
+    <script src="src/js/auth.js"></script>
 </body>
 </html>

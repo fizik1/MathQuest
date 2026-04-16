@@ -1,18 +1,5 @@
-// 1. Configuration (Merged from firebase-config.js and content.js)
-const firebaseConfig = {
-    apiKey: "AIzaSyDp0wYcheFV5vj6wUFH41sULimIZmimXWQ",
-    authDomain: "mathquest-5961c.firebaseapp.com",
-    projectId: "mathquest-5961c",
-    storageBucket: "mathquest-5961c.firebasestorage.app",
-    messagingSenderId: "2442305135",
-    appId: "1:2442305135:web:d8ad84b30ad9e366d8779a",
-    measurementId: "G-JHERMEJR33"
-};
-
-const initialTopics = [];
-
-// Initialize Firebase
-firebase.initializeApp(firebaseConfig);
+// 1. Configuration (Uses centralized firebase-config.js)
+// firebase.initializeApp(firebaseConfig); // Handled by auth.js or index.html
 const db = firebase.firestore();
 
 // 2. App State
@@ -46,24 +33,60 @@ let currentQuizState = {
     answers: []
 };
 
-async function init() {
+async function initAdminPanel() {
     try {
-        console.log("App initializing...");
+        console.log("Admin Panel initializing...");
+        renderAdminLayout();
         showLoading();
         await loadCloudData();
         setupNavigation();
         setupThemeToggle();
         updateHeaderStats();
         hideLoading();
-        console.log("App ready. Navigating to dashboard.");
+        console.log("Admin ready. Navigating to dashboard.");
         navigate('dashboard');
     } catch (e) {
         console.error("Initialization error:", e);
         hideLoading();
-        // Force render even on error
         navigate('dashboard');
     }
 }
+
+function renderAdminLayout() {
+    const app = document.getElementById('app');
+    app.innerHTML = `
+        <nav class="sidebar">
+            <div class="logo">
+                <span class="logo-icon">📐</span>
+                <span class="logo-text">MQ Admin <span style="font-size:0.7rem; background:var(--secondary); color:white; padding:2px 6px; border-radius:10px;">V2</span></span>
+            </div>
+            <ul class="nav-links">
+                <li class="active" data-page="dashboard"><span class="icon">🏠</span> <span>Asosiy</span></li>
+                <li data-page="topics"><span class="icon">📚</span> <span>Mavzular</span></li>
+                <li data-page="videos"><span class="icon">🎥</span> <span>Videolar</span></li>
+                <li data-page="mustahkamlash"><span class="icon">🧱</span> <span>Mustahkamlash</span></li>
+                <li data-page="leaderboard"><span class="icon">🏆</span> <span>Reyting</span></li>
+                <li data-page="profile"><span class="icon">👤</span> <span>Profil</span></li>
+                <li onclick="window.logout()" style="color:var(--danger); margin-top:2rem;"><span class="icon">🚪</span> <span>Chiqish</span></li>
+            </ul>
+            <div class="theme-toggle" id="theme-toggle">
+                <span class="icon">🌙</span>
+            </div>
+        </nav>
+
+        <main class="content">
+            <header class="top-bar">
+                <div class="mobile-menu-btn" id="mobile-menu-btn">☰</div>
+                <div class="user-profile-summary">
+                    <span id="header-username">O'qituvchi</span>
+                    <div class="header-avatar">👤</div>
+                </div>
+            </header>
+            <div id="view-container"></div>
+        </main>
+    `;
+}
+window.initAdminPanel = initAdminPanel;
 
 async function loadCloudData() {
     try {
@@ -242,21 +265,7 @@ function updateHeaderStats() {
     if (streak) streak.textContent = state.streak;
 }
 
-function showLoading() {
-    let loader = document.getElementById('cloud-loader');
-    if (!loader) {
-        loader = document.createElement('div');
-        loader.id = 'cloud-loader';
-        loader.innerHTML = '<div class="spinner"></div><p>Bulut bilan sinxronlanmoqda...</p>';
-        document.body.appendChild(loader);
-    }
-    loader.classList.add('active');
-}
-
-function hideLoading() {
-    const loader = document.getElementById('cloud-loader');
-    if (loader) loader.classList.remove('active');
-}
+// Loading functions removed, now using centralized window.showLoading/hideLoading from auth.js
 
 async function addXP(amount) {
     state.xp += amount;

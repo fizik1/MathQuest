@@ -1,5 +1,5 @@
-// Main App Logic
-import { topics } from './content.js';
+// 1. Configuration (Uses centralized firebase-config.js)
+const db = firebase.firestore();
 
 const state = {
     user: { name: 'O\'quvchi', id: 'guest' },
@@ -7,17 +7,10 @@ const state = {
     xp: 0,
     level: 1,
     streak: 0,
-    progress: {}, // { topicId: score }
-    unlockedTopics: ['fractions'],
-    materials: {
-        'fractions': [
-            { name: 'Kasrlar_bo\'yicha_qo\'llanma.pdf', type: 'pdf', url: '#' },
-            { name: 'Uy_vazifasi_1.docx', type: 'doc', url: '#' }
-        ],
-        'decimals': [
-            { name: 'O\'nli_kasrlar_nazariya.pdf', type: 'pdf', url: '#' }
-        ]
-    }
+    progress: {}, 
+    unlockedTopics: [],
+    topics: [], // To be loaded from cloud
+    materials: {}
 };
 
 // Mock Upload for Study Materials
@@ -58,25 +51,100 @@ let currentQuizState = {
     answers: []
 };
 
-function init() {
-    loadLocalData();
-    setupNavigation();
-    setupThemeToggle();
-    updateHeaderStats();
-    navigate('dashboard');
-}
-
-function loadLocalData() {
-    const saved = localStorage.getItem('mathquest_data');
-    if (saved) {
-        const data = JSON.parse(saved);
-        Object.assign(state, data);
+async function initStudentPanel() {
+    try {
+        console.log("Student Panel initializing...");
+        renderStudentLayout();
+        showLoading();
+        await loadCloudData();
+        setupNavigation();
+        setupThemeToggle();
+        updateHeaderStats();
+        hideLoading();
+        navigate('dashboard');
+    } catch (e) {
+        console.error("Initialization error:", e);
+        hideLoading();
+        navigate('dashboard');
     }
 }
 
-function saveLocalData() {
-    localStorage.setItem('mathquest_data', JSON.stringify(state));
+async function loadCloudData() {
+    // 1. Load global topics from admin settings
+    const adminDoc = await db.collection('settings').doc('admin_v1').get();
+    if (adminDoc.exists) {
+        const data = adminDoc.data();
+        state.topics = data.topics || [];
+        state.materials = data.materials || {};
+    }
+
+    // 2. Load student-specific progress
+    const studentId = authState.user.uid;
+    const studentDoc = await db.collection('students').doc(String(studentId)).get();
+    if (studentDoc.exists) {
+        const data = studentDoc.data();
+        state.xp = data.xp || 0;
+        state.level = data.level || 1;
+        state.streak = data.streak || 0;
+        state.progress = data.progress || {};
+        state.unlockedTopics = data.unlockedTopics || [];
+    } else {
+        // New student initialization
+        state.unlockedTopics = state.topics.length > 0 ? [state.topics[0].id] : [];
+        await saveCloudData();
+    }
 }
+
+async function saveCloudData() {
+    const studentId = authState.user.uid;
+    await db.collection('students').doc(String(studentId)).set({
+        xp: state.xp,
+        level: state.level,
+        streak: state.streak,
+        progress: state.progress,
+        unlockedTopics: state.unlockedTopics,
+        name: authState.user.email.split('@')[0]
+    });
+}
+
+function renderStudentLayout() {
+    const app = document.getElementById('app');
+    app.innerHTML = `
+        <nav class="sidebar">
+            <div class="logo">
+                <span class="logo-icon">📏</span>
+                <span class="logo-text">MQ Student</span>
+            </div>
+            <ul class="nav-links">
+                <li class="active" data-page="dashboard"><span class="icon">🏠</span> <span>Asosiy</span></li>
+                <li data-page="topics"><span class="icon">📚</span> <span>Mavzular</span></li>
+                <li data-page="videos"><span class="icon">🎥</span> <span>Videolar</span></li>
+                <li data-page="leaderboard"><span class="icon">🏆</span> <span>Reyting</span></li>
+                <li data-page="profile"><span class="icon">👤</span> <span>Profil</span></li>
+                <li onclick="window.logout()" style="color:var(--danger); margin-top:2rem;"><span class="icon">🚪</span> <span>Chiqish</span></li>
+            </ul>
+            <div class="theme-toggle" id="theme-toggle">
+                <span class="icon">🌙</span>
+            </div>
+        </nav>
+
+        <main class="content">
+            <header class="top-bar">
+                <div class="mobile-menu-btn" id="mobile-menu-btn">☰</div>
+                <div class="user-stats-bar">
+                    <div class="stat-badge xp-badge">✨ <span id="xp-value">0</span> XP</div>
+                    <div class="stat-badge level-badge">🏆 <span id="level-value">1</span> Lvl</div>
+                </div>
+                <div class="user-profile-summary">
+                    <span id="header-username">${authState.user.email}</span>
+                    <div class="header-avatar">👤</div>
+                </div>
+            </header>
+            <div id="view-container"></div>
+        </main>
+    `;
+}
+window.initStudentPanel = initStudentPanel;
 
 function setupNavigation() {
     const navItems = document.querySelectorAll('.nav-links li');
