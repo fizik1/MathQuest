@@ -1,4 +1,5 @@
 import { firebaseConfig } from './firebase-config.js';
+import { topics as initialTopics } from './content.js';
 
 // Initialize Firebase
 firebase.initializeApp(firebaseConfig);
@@ -81,6 +82,30 @@ async function saveCloudData() {
         alert("Xatolik: Ma'lumotlarni bulutga saqlab bo'lmadi. ❌");
     }
 }
+
+async function seedDatabase() {
+    if (confirm("Diqqat! Boshlang'ich mavzularni yuklashni xohlaysizmi? Bu mavjud mavzularingizga qo'shiladi.")) {
+        showLoading();
+        try {
+            // Merge initial topics into state if they don't exist
+            initialTopics.forEach(t => {
+                if (!state.topics.find(st => st.id === t.id)) {
+                    state.topics.push(t);
+                    state.unlockedTopics.push(t.id);
+                }
+            });
+            await saveCloudData();
+            hideLoading();
+            alert("Mavzular muvaffaqiyatli yuklandi! 🔥✅");
+            renderTopics();
+        } catch (e) {
+            console.error("Seed error", e);
+            hideLoading();
+            alert("Xatolik yuz berdi!");
+        }
+    }
+}
+window.seedDatabase = seedDatabase;
 
 function setupNavigation() {
     const navItems = document.querySelectorAll('.nav-links li');
@@ -234,6 +259,11 @@ function renderDashboard() {
         <div class="fade-in dashboard-view" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:80vh; text-align:center;">
             <h1 class="view-title" style="font-size:3.5rem; margin-bottom:1.5rem; text-shadow: 0 4px 15px rgba(0,0,0,0.3);">Xush kelibsiz, ${state.user.name}! 👋</h1>
             <p class="view-subtitle" style="color:rgba(255,255,255,1); font-size:1.8rem; font-weight:500; text-shadow: 0 2px 10px rgba(0,0,0,0.5);">MathQuest Admin Paneliga xush kelibsiz. <br> Barcha amallarni chap tarafdagi menyu orqali bajarishingiz mumkin.</p>
+            
+            <div style="margin-top: 3rem; background: rgba(255,255,255,0.15); backdrop-filter: blur(10px); padding: 2rem; border-radius: 20px; border: 1px solid rgba(255,255,255,0.3);">
+                <p style="font-size:1.1rem; margin-bottom:1.5rem;">Bazangi bo'sh bo'lsa, tayyor 6-sinf mavzularini (60 ta misol bilan) yuklab oling:</p>
+                <button class="primary-btn" onclick="window.seedDatabase()" style="background: var(--secondary); font-size: 1.1rem; padding: 1rem 2rem;">🚀 Tayyor mavzularni yuklash</button>
+            </div>
         </div>
     `;
 }
