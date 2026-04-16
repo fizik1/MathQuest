@@ -361,10 +361,55 @@ window.triggerUpload = triggerUpload;
 
 function renderDashboard() {
     const container = document.getElementById('view-container');
+    const topicCount = state.topics.length;
+    const materialCount = Object.values(state.materials).reduce((acc, curr) => acc + curr.length, 0);
+    const videoCount = state.topics.reduce((acc, curr) => acc + (curr.videos ? curr.videos.length : 0), 0);
+
     container.innerHTML = `
-        <div class="fade-in dashboard-view" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:80vh; text-align:center;">
-            <h1 class="view-title" style="font-size:3.5rem; margin-bottom:1.5rem; text-shadow: 0 4px 15px rgba(0,0,0,0.3);">Xush kelibsiz, ${state.user.name}! 👋</h1>
-            <p class="view-subtitle" style="color:rgba(255,255,255,1); font-size:1.8rem; font-weight:500; text-shadow: 0 2px 10px rgba(0,0,0,0.5);">MathQuest Admin Paneliga xush kelibsiz. <br> Barcha amallarni chap tarafdagi menyu orqali bajarishingiz mumkin.</p>
+        <div class="fade-in dashboard-view">
+            <h1 class="view-title">Xush kelibsiz, ${state.user.name}! 👋</h1>
+            <p class="view-subtitle">Bugungi MathQuest statistikangiz va kiritilgan ma'lumotlar:</p>
+            
+            <div class="dashboard-grid grid">
+                <div class="card stat-card">
+                    <div class="stat-icon">📚</div>
+                    <div class="stat-info">
+                        <h3>${topicCount}</h3>
+                        <p>Mavzular</p>
+                    </div>
+                </div>
+                <div class="card stat-card">
+                    <div class="stat-icon">🎥</div>
+                    <div class="stat-info">
+                        <h3>${videoCount}</h3>
+                        <p>Videolar</p>
+                    </div>
+                </div>
+                <div class="card stat-card">
+                    <div class="stat-icon">📄</div>
+                    <div class="stat-info">
+                        <h3>${materialCount}</h3>
+                        <p>Materiallar</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="recent-activity mt-3">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
+                    <h2>Sizning Mavzularingiz</h2>
+                    <button class="primary-btn btn-sm" onclick="appNavigate('topics')">Barchasini ko'rish</button>
+                </div>
+                <div class="grid">
+                    ${state.topics.slice(0, 4).map(topic => `
+                        <div class="card topic-summary-card" onclick="appNavigate('topics')">
+                            <span class="topic-icon-sm">${topic.icon || '📘'}</span>
+                            <h4>${topic.title}</h4>
+                            <p>${topic.quizzes ? topic.quizzes.length : 0} ta mashq</p>
+                        </div>
+                    `).join('')}
+                    ${topicCount === 0 ? '<p style="grid-column: 1/-1; text-align:center; padding:2rem; color:var(--text-muted)">Hozircha mavzular kiritilmagan. "Mavzular" bo\'limidan yangi mavzu qo\'shing.</p>' : ''}
+                </div>
+            </div>
         </div>
     `;
 }
