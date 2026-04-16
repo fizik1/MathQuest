@@ -166,6 +166,32 @@ async function removeTopic(topicId) {
 }
 window.removeTopic = removeTopic;
 
+async function restoreFromClipboard() {
+    const dataRaw = prompt("Iltimos, avvaldan nusxalangan ma'lumotni shu yerga qo'ying (Paste):");
+    if (dataRaw) {
+        try {
+            const parsed = JSON.parse(dataRaw);
+            const topicsToMigrate = parsed.topics || (Array.isArray(parsed) ? parsed : null);
+            if (topicsToMigrate && topicsToMigrate.length > 0) {
+                state.topics = topicsToMigrate;
+                state.xp = parsed.xp || 0;
+                state.level = parsed.level || 1;
+                state.materials = parsed.materials || {};
+                state.unlockedTopics = parsed.unlockedTopics || state.topics.map(t => t.id);
+                
+                await saveCloudData();
+                alert("Ma'lumotlar muvaffaqiyatli saqlandi! ✅");
+                renderTopics();
+            } else {
+                alert("Xatolik: Ma'lumot formati noto'g'ri.");
+            }
+        } catch (e) {
+            alert("Xatolik: Matnni o'qib bo'lmadi. JSON formatida ekanligiga ishonch hosil qiling.");
+        }
+    }
+}
+window.restoreFromClipboard = restoreFromClipboard;
+
 function setupNavigation() {
     const navItems = document.querySelectorAll('.nav-links li');
     navItems.forEach(item => {
@@ -320,10 +346,14 @@ function renderDashboard() {
             <p class="view-subtitle" style="color:rgba(255,255,255,1); font-size:1.8rem; font-weight:500; text-shadow: 0 2px 10px rgba(0,0,0,0.5);">MathQuest Admin Paneliga xush kelibsiz. <br> Barcha amallarni chap tarafdagi menyu orqali bajarishingiz mumkin.</p>
             
             ${state.topics.length === 0 ? `
-            <div style="margin-top: 3rem; background: rgba(255, 193, 7, 0.2); backdrop-filter: blur(10px); padding: 2rem; border-radius: 20px; border: 1px solid #ffc107;">
-                <h3 style="color: #ffc107; margin-bottom: 1rem;">⚠️ Diqqat: Mavzular ko'rinmayaptimi?</h3>
-                <p style="font-size:1.1rem; margin-bottom:1.5rem;">Agar siz mavzularni <b>localhost</b>da kiritgan bo'lsangiz, ularni bulutga o'tkazish uchun o'sha kompyuterda saytni bir marta ochishingiz kerak.</p>
-                <button class="primary-btn" onclick="location.reload()" style="background: #ffc107; color: #000; font-size: 1rem; padding: 0.8rem 2rem;">🔄 Yangilash va qayta qidirish</button>
+            <div style="margin-top: 3rem; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(15px); padding: 2.5rem; border-radius: 25px; border: 1px solid rgba(255,255,255,0.2); max-width: 600px;">
+                <h3 style="color: #ffc107; margin-bottom: 1rem; font-size: 1.5rem;">⚠️ Mavzularingizni qaytarish</h3>
+                <p style="font-size:1.1rem; color: white; margin-bottom:1.5rem;">Agar sizda avvaldan nusxalangan ma'lumotlar bo'lsa, ularni hoziroq tiklashimiz mumkin:</p>
+                
+                <div style="display:flex; flex-direction:column; gap:1rem;">
+                    <button class="primary-btn" onclick="window.restoreFromClipboard()" style="background: var(--primary); font-size: 1rem; padding: 1rem 2rem;">📋 Ma'lumotlarni pastdan yuklash</button>
+                    <p style="font-size:0.9rem; color:rgba(255,255,255,0.7);">Yoki o'zingiz kiritgan kompyuterda <b>index.html</b> ni oching.</p>
+                </div>
             </div>
             ` : ''}
         </div>
