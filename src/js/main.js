@@ -51,7 +51,6 @@ async function loadCloudData() {
         const doc = await db.collection('settings').doc('admin_v1').get();
         if (doc.exists) {
             const data = doc.data();
-            // Sync state with cloud data
             state.xp = data.xp || 0;
             state.level = data.level || 1;
             state.streak = data.streak || 0;
@@ -60,9 +59,35 @@ async function loadCloudData() {
             state.topics = data.topics || [];
             state.materials = data.materials || {};
         }
+
+        // Migration check: if cloud is empty, check for local data
+        if (state.topics.length === 0) {
+            const localDataRaw = localStorage.getItem('mathquest_admin_v1') || 
+                               localStorage.getItem('mathquest_v1') || 
+                               localStorage.getItem('mathquest_data');
+            
+            if (localDataRaw) {
+                try {
+                    const localData = JSON.parse(localDataRaw);
+                    if (localData.topics && localData.topics.length > 0) {
+                        state.xp = localData.xp || state.xp;
+                        state.level = localData.level || state.level;
+                        state.streak = localData.streak || state.streak;
+                        state.progress = localData.progress || state.progress;
+                        state.unlockedTopics = localData.unlockedTopics || state.unlockedTopics;
+                        state.topics = localData.topics;
+                        state.materials = localData.materials || state.materials;
+                        
+                        console.log("Migration: Moving local data to cloud...");
+                        await saveCloudData();
+                    }
+                } catch (e) {
+                    console.error("Migration error", e);
+                }
+            }
+        }
     } catch (e) {
         console.error("Cloud load error", e);
-        // Fallback or warning
     }
 }
 
