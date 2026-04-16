@@ -179,9 +179,18 @@ async function saveCloudData() {
             topics: state.topics,
             materials: state.materials
         });
+        updateSyncTime();
     } catch (e) {
         console.error("Cloud save error", e);
         alert("Xatolik: Ma'lumotlarni bulutga saqlab bo'lmadi. ❌");
+    }
+}
+
+function updateSyncTime() {
+    const el = document.getElementById('sync-time');
+    if (el) {
+        const now = new Date();
+        el.textContent = `Oxirgi sinxronizatsiya: ${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
     }
 }
 
@@ -367,7 +376,10 @@ function renderDashboard() {
 
     container.innerHTML = `
         <div class="fade-in dashboard-view">
-            <h1 class="view-title">Xush kelibsiz, ${state.user.name}! 👋</h1>
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+                <h1 class="view-title" style="margin:0;">Xush kelibsiz, ${state.user.name}! 👋</h1>
+                <span id="sync-time" style="font-size:0.8rem; color:var(--text-muted); background:rgba(var(--primary-rgb), 0.1); padding:0.4rem 0.8rem; border-radius:var(--radius-full);">Bulut bilan bog'langan ☁️</span>
+            </div>
             <p class="view-subtitle">Bugungi MathQuest statistikangiz va kiritilgan ma'lumotlar:</p>
             
             <div class="dashboard-grid grid">
