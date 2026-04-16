@@ -344,18 +344,6 @@ function renderDashboard() {
         <div class="fade-in dashboard-view" style="display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:80vh; text-align:center;">
             <h1 class="view-title" style="font-size:3.5rem; margin-bottom:1.5rem; text-shadow: 0 4px 15px rgba(0,0,0,0.3);">Xush kelibsiz, ${state.user.name}! 👋</h1>
             <p class="view-subtitle" style="color:rgba(255,255,255,1); font-size:1.8rem; font-weight:500; text-shadow: 0 2px 10px rgba(0,0,0,0.5);">MathQuest Admin Paneliga xush kelibsiz. <br> Barcha amallarni chap tarafdagi menyu orqali bajarishingiz mumkin.</p>
-            
-            ${state.topics.length === 0 ? `
-            <div style="margin-top: 3rem; background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(15px); padding: 2.5rem; border-radius: 25px; border: 1px solid rgba(255,255,255,0.2); max-width: 600px;">
-                <h3 style="color: #ffc107; margin-bottom: 1rem; font-size: 1.5rem;">⚠️ Mavzularingizni qaytarish</h3>
-                <p style="font-size:1.1rem; color: white; margin-bottom:1.5rem;">Agar sizda avvaldan nusxalangan ma'lumotlar bo'lsa, ularni hoziroq tiklashimiz mumkin:</p>
-                
-                <div style="display:flex; flex-direction:column; gap:1rem;">
-                    <button class="primary-btn" onclick="window.restoreFromClipboard()" style="background: var(--primary); font-size: 1rem; padding: 1rem 2rem;">📋 Ma'lumotlarni pastdan yuklash</button>
-                    <p style="font-size:0.9rem; color:rgba(255,255,255,0.7);">Yoki o'zingiz kiritgan kompyuterda <b>index.html</b> ni oching.</p>
-                </div>
-            </div>
-            ` : ''}
         </div>
     `;
 }
