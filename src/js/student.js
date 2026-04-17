@@ -83,7 +83,7 @@ async function loadLocalData() {
             state.topics = adminData.topics || [];
             state.materials = adminData.materials || {};
         } else {
-            state.topics = (typeof initialTopics !== 'undefined' ? initialTopics : []);
+            state.topics = (typeof topics !== 'undefined' ? JSON.parse(JSON.stringify(topics)) : []);
             state.materials = {};
         }
 

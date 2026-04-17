@@ -107,12 +107,38 @@ async function loadLocalData() {
             state.streak = data.streak || 0;
             state.progress = data.progress || {};
             state.unlockedTopics = data.unlockedTopics || [];
-            state.topics = data.topics || (typeof initialTopics !== 'undefined' ? initialTopics : []);
+            state.topics = data.topics || (typeof topics !== 'undefined' ? topics : []);
             state.materials = data.materials || {};
         } else {
             // Default to content.js if no local data
-            state.topics = (typeof initialTopics !== 'undefined' ? JSON.parse(JSON.stringify(initialTopics)) : []);
+            state.topics = (typeof topics !== 'undefined' ? JSON.parse(JSON.stringify(topics)) : []);
             state.unlockedTopics = state.topics.map(t => t.id);
+        }
+
+        // DEEP SCAN RECOVERY: If topics is empty, user might have lost data during Firebase removal.
+        if (!state.topics || state.topics.length === 0) {
+            const possibleKeys = ['mathquest_admin_v1', 'mathquest_v1', 'mathquest_data', 'mq_admin_v1', 'firebase_backup'];
+            for (let key of possibleKeys) {
+                const oldDataRaw = localStorage.getItem(key);
+                if (oldDataRaw) {
+                    try {
+                        const parsed = JSON.parse(oldDataRaw);
+                        const topicsToRecover = parsed.topics || (Array.isArray(parsed) ? parsed : null);
+                        if (topicsToRecover && topicsToRecover.length > 0) {
+                            state.topics = topicsToRecover;
+                            state.materials = parsed.materials || state.materials;
+                            state.xp = parsed.xp || state.xp;
+                            state.level = parsed.level || state.level;
+                            state.unlockedTopics = parsed.unlockedTopics || state.topics.map(t => t.id);
+                            
+                            await saveLocalData();
+                            console.log(`Recovered data from key: ${key}`);
+                            // Alert will be shown after loading finishes usually, but let's just quietly load it.
+                            break;
+                        }
+                    } catch(e) {}
+                }
+            }
         }
     } catch (e) {
         console.error("Local load error", e);
