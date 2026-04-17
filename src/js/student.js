@@ -317,10 +317,13 @@ function renderTopics() {
 }
 
 function renderQuiz(topicId) {
-    const topic = topics.find(t => t.id === topicId);
+    const topic = state.topics.find(t => t.id === topicId);
     if (!topic) return;
 
     currentQuizState = { topic, currentQuestionIndex: 0, score: 0, answers: [] };
+    
+    // Check if there are any materials for this topic
+    const materials = state.materials ? state.materials[topicId] || [] : [];
     
     // First, show Theory introduction
     const container = document.getElementById('view-container');
@@ -330,6 +333,21 @@ function renderQuiz(topicId) {
             <div class="theory-content" style="font-size:1.2rem; margin:2rem 0; line-height:1.8;">
                 <p>${topic.theory}</p>
             </div>
+            
+            ${materials.length > 0 ? `
+            <div class="student-materials" style="margin:2rem 0; padding:1.5rem; background:rgba(var(--primary-rgb), 0.05); border-radius:var(--radius-md);">
+                <h3 style="margin-bottom:1rem; display:flex; align-items:center; gap:0.5rem;"><span class="icon">📁</span> O'quv Materiallari</h3>
+                <div class="file-list grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:1rem;">
+                    ${materials.map((f, i) => `
+                        <a href="${f.url}" target="_blank" class="file-item card" style="text-decoration:none; display:flex; align-items:center; gap:0.8rem; padding:1rem; transition:transform 0.2s; border:1px solid var(--border);">
+                            <span style="font-size:2rem;">${f.type === 'pdf' ? '📄' : f.type === 'doc' ? '📝' : '📊'}</span>
+                            <span style="font-weight:600; color:var(--text-main); word-break:break-all;">${f.name}</span>
+                        </a>
+                    `).join('')}
+                </div>
+            </div>
+            ` : ''}
+
             <div class="theory-actions">
                 <button class="primary-btn" onclick="window.renderCurrentQuestion()">Mashqni boshlash 🚀</button>
                 <button class="primary-btn" style="background:var(--border); color:var(--text-main)" onclick="appNavigate('topics')">Orqaga</button>
