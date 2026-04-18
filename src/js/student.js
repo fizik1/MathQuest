@@ -1,46 +1,24 @@
 (function() {
-// 2. App State
+
 const state = {
     user: { name: 'O\'quvchi', id: 'guest' },
     currentPage: 'dashboard',
     xp: 0,
     level: 1,
     streak: 0,
-    progress: {}, 
+    progress: {},
     unlockedTopics: [],
-    topics: [], // To be loaded from cloud
+    topics: [],
     materials: {}
 };
 
-// Mock Upload for Study Materials
-function mockUpload(topicId, type) {
-    const fileName = prompt(`Yangi ${type.toUpperCase()} hujjat nomini kiriting:`);
-    if (!fileName) return;
-
-    const newFile = {
-        name: fileName + (type === 'pdf' ? '.pdf' : '.docx'),
-        type: type,
-        url: '#' // In a real app, this would be the Firebase Storage URL
-    };
-
-    if (!state.materials[topicId]) {
-        state.materials[topicId] = [];
-    }
-    state.materials[topicId].push(newFile);
-    
-    saveLocalData();
-    renderTopics();
-    alert("Hujjat muvaffaqiyatli biriktirildi! ✅");
-}
-window.mockUpload = mockUpload;
-
 const routes = {
-    dashboard: renderDashboard,
-    topics: renderTopics,
-    videos: renderVideos,
+    dashboard:   renderDashboard,
+    topics:      renderTopics,
+    videos:      renderVideos,
     leaderboard: renderLeaderboard,
-    profile: renderProfile,
-    quiz: renderQuiz
+    profile:     renderProfile,
+    quiz:        renderQuiz
 };
 
 let currentQuizState = {
@@ -50,78 +28,145 @@ let currentQuizState = {
     answers: []
 };
 
+// ─── Init ──────────────────────────────────────────────────────────────────
+
 async function initStudentPanel() {
     try {
-        console.log("Student Panel initializing...");
-        window.appNavigate = navigate;
-        window.startQuiz = (id) => navigate('quiz', id);
-        window.submitAnswer = submitAnswer;
-        window.rewardVideo = rewardVideo;
-        window.mockUpload = mockUpload;
-        
+        // Sync user info from auth
+        if (authState.user) {
+            state.user.name = authState.user.name || authState.user.email?.split('@')[0] || 'O\'quvchi';
+            state.user.id   = authState.user.uid;
+        }
+
+        window.appNavigate          = navigate;
+        window.startQuiz            = (id) => navigate('quiz', id);
+        window.submitAnswer         = submitAnswer;
+        window.rewardVideo          = rewardVideo;
+        window.renderCurrentQuestion = renderCurrentQuestion;
+
         renderStudentLayout();
         showLoading();
-        await loadLocalData();
+        await loadData();
         setupNavigation();
         setupThemeToggle();
         updateHeaderStats();
         hideLoading();
         navigate('dashboard');
     } catch (e) {
-        console.error("Initialization error:", e);
+        console.error("Student init error:", e);
         hideLoading();
         navigate('dashboard');
     }
 }
+window.initStudentPanel = initStudentPanel;
 
-async function loadLocalData() {
+// ─── Data ──────────────────────────────────────────────────────────────────
+
+async function loadData() {
     try {
-        // 1. Load global topics from content.js or simulated admin state
-        const adminDataRaw = localStorage.getItem('mq_admin_v2');
-        if (adminDataRaw) {
-            const adminData = JSON.parse(adminDataRaw);
-            state.topics = adminData.topics || [];
-            state.materials = adminData.materials || {};
-        } else {
-            state.topics = (typeof topics !== 'undefined' ? JSON.parse(JSON.stringify(topics)) : []);
+        // 1. Load topics from Supabase
+        const { data: topicsData, error: topicsError } = await supabaseClient
+            .from('topics')
+            .select('*')
+            .order('sort_order', { ascending: true });
+
+        if (!topicsError && topicsData) {
+            state.topics = topicsData.map(t => ({
+                id:      t.id,
+                title:   t.title,
+                icon:    t.icon    || '📚',
+                theory:  t.theory  || '',
+                quizzes: t.quizzes || [],
+                videos:  t.videos  || []
+            }));
             state.materials = {};
-        }
-
-        // 2. Load student-specific progress
-        const studentId = authState.user.uid;
-        const studentDataRaw = localStorage.getItem(`mq_student_v2_${studentId}`);
-        if (studentDataRaw) {
-            const data = JSON.parse(studentDataRaw);
-            state.xp = data.xp || 0;
-            state.level = data.level || 1;
-            state.streak = data.streak || 0;
-            state.progress = data.progress || {};
-            state.unlockedTopics = data.unlockedTopics || [];
+            topicsData.forEach(t => { state.materials[t.id] = t.materials || []; });
         } else {
-            // New student initialization
-            state.unlockedTopics = state.topics.length > 0 ? [state.topics[0].id] : [];
-            await saveLocalData();
+            const cached = localStorage.getItem('mq_admin_v2');
+            if (cached) {
+                const d = JSON.parse(cached);
+                state.topics    = d.topics    || [];
+                state.materials = d.materials || {};
+            }
         }
-    } catch(e) {
-        console.error("Local load error", e);
+
+        // 2. Load student progress from Supabase
+        const studentId = authState.user.uid;
+        const { data: progress, error: progressError } = await supabaseClient
+            .from('student_progress')
+            .select('*')
+            .eq('student_id', studentId)
+            .single();
+
+        if (!progressError && progress) {
+            state.xp             = progress.xp             || 0;
+            state.level          = progress.level          || 1;
+            state.streak         = progress.streak         || 0;
+            state.progress       = progress.progress       || {};
+            state.unlockedTopics = progress.unlocked_topics || [];
+            if (progress.name && progress.name !== authState.user.name) {
+                state.user.name = progress.name;
+            }
+        } else {
+            // New student: unlock only first topic
+            state.unlockedTopics = state.topics.length > 0 ? [state.topics[0].id] : [];
+            await saveData();
+        }
+    } catch (e) {
+        console.error("Load error:", e);
+        // Offline fallback
+        _loadFromCache();
     }
 }
 
-async function saveLocalData() {
-    try {
-        const studentId = authState.user.uid;
-        localStorage.setItem(`mq_student_v2_${studentId}`, JSON.stringify({
-            xp: state.xp,
-            level: state.level,
-            streak: state.streak,
-            progress: state.progress,
-            unlockedTopics: state.unlockedTopics,
-            name: authState.user.email ? authState.user.email.split('@')[0] : 'Student'
-        }));
-    } catch(e) {
-        console.error("Local save error", e);
+function _loadFromCache() {
+    const adminCache = localStorage.getItem('mq_admin_v2');
+    if (adminCache) {
+        const d = JSON.parse(adminCache);
+        state.topics    = d.topics    || [];
+        state.materials = d.materials || {};
+    }
+    const studentCache = localStorage.getItem(`mq_student_v2_${authState.user.uid}`);
+    if (studentCache) {
+        const d          = JSON.parse(studentCache);
+        state.xp             = d.xp             || 0;
+        state.level          = d.level          || 1;
+        state.streak         = d.streak         || 0;
+        state.progress       = d.progress       || {};
+        state.unlockedTopics = d.unlockedTopics  || [];
     }
 }
+
+async function saveData() {
+    const studentId   = authState.user.uid;
+    const studentName = authState.user.name || state.user.name;
+
+    // Local cache
+    localStorage.setItem(`mq_student_v2_${studentId}`, JSON.stringify({
+        xp: state.xp, level: state.level, streak: state.streak,
+        progress: state.progress, unlockedTopics: state.unlockedTopics,
+        name: studentName
+    }));
+
+    // Supabase
+    try {
+        const { error } = await supabaseClient.from('student_progress').upsert({
+            student_id:      studentId,
+            xp:              state.xp,
+            level:           state.level,
+            streak:          state.streak,
+            progress:        state.progress,
+            unlocked_topics: state.unlockedTopics,
+            name:            studentName,
+            updated_at:      new Date().toISOString()
+        });
+        if (error) console.error("Progress save error:", error);
+    } catch (e) {
+        console.error("Cloud save error:", e);
+    }
+}
+
+// ─── Layout ────────────────────────────────────────────────────────────────
 
 function renderStudentLayout() {
     const app = document.getElementById('app');
@@ -143,16 +188,16 @@ function renderStudentLayout() {
                 <span class="icon">🌙</span>
             </div>
         </nav>
-
         <main class="content">
             <header class="top-bar">
                 <div class="mobile-menu-btn" id="mobile-menu-btn">☰</div>
                 <div class="user-stats-bar">
                     <div class="stat-badge xp-badge">✨ <span id="xp-value">0</span> XP</div>
                     <div class="stat-badge level-badge">🏆 <span id="level-value">1</span> Lvl</div>
+                    <div class="stat-badge streak-badge">🔥 <span id="streak-value">0</span> kun</div>
                 </div>
                 <div class="user-profile-summary">
-                    <span id="header-username">${authState.user.email}</span>
+                    <span id="header-username">${state.user.name}</span>
                     <div class="header-avatar">👤</div>
                 </div>
             </header>
@@ -160,154 +205,208 @@ function renderStudentLayout() {
         </main>
     `;
 }
-window.initStudentPanel = initStudentPanel;
+
+// ─── Navigation & helpers ─────────────────────────────────────────────────
 
 function setupNavigation() {
-    const navItems = document.querySelectorAll('.nav-links li');
+    const navItems = document.querySelectorAll('.nav-links li[data-page]');
     navItems.forEach(item => {
         item.addEventListener('click', () => {
             const page = item.getAttribute('data-page');
-            navigate(page);
-            
+            if (!page) return;
             navItems.forEach(i => i.classList.remove('active'));
             item.classList.add('active');
+            navigate(page);
         });
     });
-
     const mobileBtn = document.getElementById('mobile-menu-btn');
-    const sidebar = document.querySelector('.sidebar');
-    if (mobileBtn) {
-        mobileBtn.addEventListener('click', () => {
-            sidebar.classList.toggle('active');
-        });
-    }
+    const sidebar   = document.querySelector('.sidebar');
+    if (mobileBtn) mobileBtn.addEventListener('click', () => sidebar.classList.toggle('active'));
 }
 
 function navigate(page, params = null) {
     if (routes[page]) {
         state.currentPage = page;
         routes[page](params);
-        document.querySelector('.sidebar').classList.remove('active');
+        document.querySelector('.sidebar')?.classList.remove('active');
         window.scrollTo(0, 0);
     }
 }
 
 function setupThemeToggle() {
     const toggle = document.getElementById('theme-toggle');
+    if (!toggle) return;
+
+    // Restore saved theme
+    const saved = localStorage.getItem('mq_theme');
+    if (saved === 'dark-theme') {
+        document.body.classList.add('dark-theme');
+        toggle.querySelector('.icon').textContent = '☀️';
+    }
+
     toggle.addEventListener('click', () => {
         document.body.classList.toggle('dark-theme');
-        toggle.querySelector('.icon').textContent = document.body.classList.contains('dark-theme') ? '☀️' : '🌙';
+        const isDark = document.body.classList.contains('dark-theme');
+        toggle.querySelector('.icon').textContent = isDark ? '☀️' : '🌙';
+        localStorage.setItem('mq_theme', isDark ? 'dark-theme' : '');
     });
 }
 
 function updateHeaderStats() {
-    document.getElementById('xp-value').textContent = state.xp;
-    document.getElementById('level-value').textContent = state.level;
-    document.getElementById('streak-value').textContent = state.streak;
+    const xpEl     = document.getElementById('xp-value');
+    const levelEl  = document.getElementById('level-value');
+    const streakEl = document.getElementById('streak-value');
+    const nameEl   = document.getElementById('header-username');
+    if (xpEl)     xpEl.textContent     = state.xp;
+    if (levelEl)  levelEl.textContent  = state.level;
+    if (streakEl) streakEl.textContent = state.streak;
+    if (nameEl)   nameEl.textContent   = state.user.name;
 }
 
 function addXP(amount) {
     state.xp += amount;
-    // Level up logic (Level = 1 + floor(XP/100))
     const newLevel = Math.floor(state.xp / 100) + 1;
     if (newLevel > state.level) {
         state.level = newLevel;
-        showLevelUpModal(newLevel);
+        _showLevelUpBanner(newLevel);
     }
     updateHeaderStats();
-    saveLocalData();
+    saveData();
 }
 
-function showLevelUpModal(level) {
-    alert(`Tabriklaymiz! Siz ${level}-darajaga chiqdingiz! 🎊`);
+function _showLevelUpBanner(level) {
+    const banner = document.createElement('div');
+    banner.style = `
+        position:fixed; top:20px; left:50%; transform:translateX(-50%);
+        background:var(--primary); color:white; padding:1rem 2rem;
+        border-radius:var(--radius-full); font-size:1.1rem; font-weight:700;
+        box-shadow:0 8px 24px rgba(0,0,0,0.2); z-index:9999;
+        animation: fadeIn 0.3s ease;
+    `;
+    banner.textContent = `🎊 Tabriklaymiz! ${level}-darajaga chiqdingiz!`;
+    document.body.appendChild(banner);
+    setTimeout(() => banner.remove(), 3000);
 }
 
-// Views
+// ─── Dashboard ─────────────────────────────────────────────────────────────
+
 function renderDashboard() {
-    const container = document.getElementById('view-container');
+    const container    = document.getElementById('view-container');
+    const totalTopics  = state.topics.length;
+    const doneTopics   = Object.values(state.progress).filter(p => p >= 70).length;
+    const nextXP       = 100 - (state.xp % 100);
+    const progressPct  = state.xp % 100;
+
     container.innerHTML = `
         <div class="fade-in dashboard-view">
             <h1 class="view-title">Xush kelibsiz, ${state.user.name}! 👋</h1>
-            <p class="view-subtitle" style="color:rgba(255,255,255,0.8)">Bugungi matematik sarguzashtingizni boshlang.</p>
-            
+            <p class="view-subtitle">Bugungi matematik sarguzashtingizni boshlang.</p>
+
             <div class="dashboard-grid grid">
                 <div class="card daily-challenge">
                     <h3>📅 Kunlik Topshiriq</h3>
                     <p>Mavzulardan birini yakunlang va +50 XP oling!</p>
+                    <button class="primary-btn btn-sm" style="margin-top:1rem;" onclick="appNavigate('topics')">Boshlash</button>
                 </div>
-                
+
                 <div class="card progress-overview" style="color:var(--text-main)">
                     <h3>📊 Umumiy Progress</h3>
                     <div class="level-indicator">
                         <div class="level-ring">${state.level}</div>
-                        <div class="xp-progress-bar">
-                            <div class="fill" style="width: ${state.xp % 100}%"></div>
+                        <div style="flex:1;">
+                            <div class="xp-progress-bar">
+                                <div class="fill" style="width: ${progressPct}%"></div>
+                            </div>
+                            <p style="font-size:0.8rem; margin-top:0.3rem; color:var(--text-muted)">
+                                Keyingi darajagacha <strong>${nextXP} XP</strong>
+                            </p>
                         </div>
                     </div>
-                    <p>Keyingi darajagacha <strong>${100 - (state.xp % 100)} XP</strong> qoldi.</p>
+                    <p style="margin-top:0.5rem;">Yakunlangan mavzular: <strong>${doneTopics} / ${totalTopics}</strong></p>
                 </div>
             </div>
 
-            <h2 style="margin-top: 3rem; margin-bottom: 2rem;">Tezkor Kirish</h2>
+            <h2 style="margin-top:3rem; margin-bottom:1.5rem;">Tezkor Kirish</h2>
             <div class="grid">
-                <div class="card access-card" onclick="appNavigate('topics')" style="color:var(--text-main)">
+                <div class="card access-card" onclick="appNavigate('topics')" style="cursor:pointer;">
                     <div class="icon">📚</div>
                     <h4>Mavzular</h4>
-                    <p>4 ta mavzu mavjud</p>
+                    <p>${state.unlockedTopics.length} / ${totalTopics} ochilgan</p>
                 </div>
-                <div class="card access-card" onclick="appNavigate('videos')" style="color:var(--text-main)">
+                <div class="card access-card" onclick="appNavigate('videos')" style="cursor:pointer;">
                     <div class="icon">🎥</div>
                     <h4>Videolar</h4>
-                    <p>Darslarni ko'ring</p>
+                    <p>${state.topics.reduce((a,t) => a + (t.videos?.length||0), 0)} ta video</p>
+                </div>
+                <div class="card access-card" onclick="appNavigate('leaderboard')" style="cursor:pointer;">
+                    <div class="icon">🏆</div>
+                    <h4>Reyting</h4>
+                    <p>Top o'quvchilar</p>
                 </div>
             </div>
         </div>
     `;
 }
 
+// ─── Topics ────────────────────────────────────────────────────────────────
+
 function renderTopics() {
     const container = document.getElementById('view-container');
+
+    if (state.topics.length === 0) {
+        container.innerHTML = `<div class="fade-in card" style="text-align:center; padding:3rem;">
+            <p style="font-size:2rem;">📚</p>
+            <p style="color:var(--text-muted)">Hozircha mavzular qo'shilmagan.<br>O'qituvchingizni kuting.</p>
+        </div>`;
+        return;
+    }
+
     container.innerHTML = `
         <div class="fade-in">
             <h1 class="view-title">Matematika Mavzulari 📚</h1>
             <div class="topics-grid grid">
-                ${topics.map(topic => {
+                ${state.topics.map((topic, idx) => {
                     const isUnlocked = state.unlockedTopics.includes(topic.id);
-                    const progress = state.progress[topic.id] || 0;
-                    const materials = state.materials ? state.materials[topic.id] || [] : [];
-                    
+                    const progress   = state.progress[topic.id] || 0;
+                    const materials  = state.materials[topic.id] || [];
+                    const isPassed   = progress >= 70;
+
                     return `
                         <div class="card topic-card ${isUnlocked ? '' : 'locked'}">
                             <div class="topic-icon">${isUnlocked ? topic.icon : '🔒'}</div>
                             <h3>${topic.title}</h3>
-                            <div class="progress-info">
-                                <div class="progress-bar"><div class="fill" style="width: ${progress}%"></div></div>
+                            ${isPassed ? '<span style="font-size:0.8rem; background:var(--success,#22c55e); color:white; padding:2px 8px; border-radius:99px;">✅ O\'tildi</span>' : ''}
+
+                            <div class="progress-info" style="margin-top:0.8rem;">
+                                <div class="progress-bar"><div class="fill" style="width:${progress}%"></div></div>
                                 <span>${progress}%</span>
                             </div>
-                            
-                            <!-- Study Materials Section -->
-                            <div class="materials-section">
-                                <h4>📖 O'quv materiallari</h4>
-                                <div class="file-list" id="files-${topic.id}">
-                                    ${materials.length > 0 ? materials.map(file => `
+
+                            ${materials.length > 0 ? `
+                            <div class="materials-section" style="margin-top:1rem;">
+                                <h4 style="font-size:0.85rem; margin-bottom:0.5rem;">📖 O'quv materiallari</h4>
+                                <div class="file-list">
+                                    ${materials.map(f => `
                                         <div class="file-item">
                                             <div class="file-info">
-                                                <span class="file-icon">${file.type === 'pdf' ? '📄' : '📝'}</span>
-                                                <span class="file-name">${file.name}</span>
+                                                <span class="file-icon">${f.type === 'pdf' ? '📄' : f.type === 'ppt' ? '📊' : '📝'}</span>
+                                                <span class="file-name">${f.name}</span>
                                             </div>
-                                            <a href="${file.url}" target="_blank" class="btn-icon">⬇️</a>
+                                            ${f.url && f.url !== '#' ? `<a href="${f.url}" target="_blank" class="btn-icon">⬇️</a>` : ''}
                                         </div>
-                                    `).join('') : '<p style="font-size:0.8rem; color:var(--text-muted)">Hozircha materiallar yo\'q.</p>'}
+                                    `).join('')}
                                 </div>
-                                <div class="upload-area">
-                                    <button class="btn-icon" title="PDF biriktirish" onclick="window.mockUpload('${topic.id}', 'pdf')">📄+</button>
-                                    <button class="btn-icon" title="Word biriktirish" onclick="window.mockUpload('${topic.id}', 'doc')">📝+</button>
-                                </div>
-                            </div>
+                            </div>` : ''}
 
-                            <button class="primary-btn" style="width:100%; margin-top:1rem;" ${isUnlocked ? `onclick="window.startQuiz('${topic.id}')"` : 'disabled'}>
-                                ${isUnlocked ? 'Mashqni boshlash' : 'Qulflangan'}
+                            <button class="primary-btn"
+                                style="width:100%; margin-top:1rem;"
+                                ${isUnlocked && topic.quizzes?.length > 0 ? `onclick="window.startQuiz('${topic.id}')"` : 'disabled'}>
+                                ${!isUnlocked ? '🔒 Qulflangan' : topic.quizzes?.length > 0 ? 'Mashqni boshlash →' : 'Savollar yo\'q'}
                             </button>
+
+                            ${!isUnlocked && idx > 0 ? `<p style="font-size:0.75rem; color:var(--text-muted); text-align:center; margin-top:0.5rem;">
+                                Oldingi mavzudan 70% olsangiz ochiladi
+                            </p>` : ''}
                         </div>
                     `;
                 }).join('')}
@@ -316,90 +415,113 @@ function renderTopics() {
     `;
 }
 
+// ─── Quiz ──────────────────────────────────────────────────────────────────
+
 function renderQuiz(topicId) {
     const topic = state.topics.find(t => t.id === topicId);
     if (!topic) return;
+    if (!topic.quizzes?.length) {
+        alert("Bu mavzuda hali savollar yo'q.");
+        return navigate('topics');
+    }
 
     currentQuizState = { topic, currentQuestionIndex: 0, score: 0, answers: [] };
-    
-    // Check if there are any materials for this topic
-    const materials = state.materials ? state.materials[topicId] || [] : [];
-    
-    // First, show Theory introduction
-    const container = document.getElementById('view-container');
+
+    const materials  = state.materials[topicId] || [];
+    const container  = document.getElementById('view-container');
     container.innerHTML = `
         <div class="theory-view fade-in card">
             <h2 class="view-title">${topic.title}: Nazariya 📖</h2>
-            <div class="theory-content" style="font-size:1.2rem; margin:2rem 0; line-height:1.8;">
-                <p>${topic.theory}</p>
+            <div class="theory-content" style="font-size:1.1rem; margin:2rem 0; line-height:1.8;">
+                ${topic.theory
+                    ? `<div>${topic.theory}</div>`
+                    : '<p style="color:var(--text-muted)">Bu mavzu uchun nazariya hali qo\'shilmagan.</p>'}
             </div>
-            
+
             ${materials.length > 0 ? `
-            <div class="student-materials" style="margin:2rem 0; padding:1.5rem; background:rgba(var(--primary-rgb), 0.05); border-radius:var(--radius-md);">
-                <h3 style="margin-bottom:1rem; display:flex; align-items:center; gap:0.5rem;"><span class="icon">📁</span> O'quv Materiallari</h3>
-                <div class="file-list grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:1rem;">
-                    ${materials.map((f, i) => `
-                        <a href="${f.url}" target="_blank" class="file-item card" style="text-decoration:none; display:flex; align-items:center; gap:0.8rem; padding:1rem; transition:transform 0.2s; border:1px solid var(--border);">
+            <div class="student-materials" style="margin:2rem 0; padding:1.5rem; background:rgba(var(--primary-rgb),0.05); border-radius:var(--radius-md);">
+                <h3 style="margin-bottom:1rem;"><span class="icon">📁</span> O'quv Materiallari</h3>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:1rem;">
+                    ${materials.map(f => `
+                        <a href="${f.url || '#'}" target="_blank" class="card"
+                            style="text-decoration:none; display:flex; align-items:center; gap:0.8rem; padding:1rem; border:1px solid var(--border);">
                             <span style="font-size:2rem;">${f.type === 'pdf' ? '📄' : f.type === 'doc' ? '📝' : '📊'}</span>
-                            <span style="font-weight:600; color:var(--text-main); word-break:break-all;">${f.name}</span>
+                            <span style="font-weight:600; color:var(--text-main); word-break:break-all; font-size:0.9rem;">${f.name}</span>
                         </a>
                     `).join('')}
                 </div>
-            </div>
-            ` : ''}
+            </div>` : ''}
 
             <div class="theory-actions">
                 <button class="primary-btn" onclick="window.renderCurrentQuestion()">Mashqni boshlash 🚀</button>
-                <button class="primary-btn" style="background:var(--border); color:var(--text-main)" onclick="appNavigate('topics')">Orqaga</button>
+                <button class="primary-btn" style="background:var(--border); color:var(--text-main);" onclick="appNavigate('topics')">Orqaga</button>
             </div>
         </div>
     `;
 }
-window.renderCurrentQuestion = renderCurrentQuestion;
 
 function renderCurrentQuestion() {
     const { topic, currentQuestionIndex } = currentQuizState;
-    const question = topic.quizzes[currentQuestionIndex];
+    const question  = topic.quizzes[currentQuestionIndex];
     const container = document.getElementById('view-container');
-    
+    const pct       = Math.round((currentQuestionIndex / topic.quizzes.length) * 100);
+
     container.innerHTML = `
         <div class="quiz-view fade-in">
             <div class="quiz-header">
                 <h2>${topic.title}</h2>
                 <span>Savol ${currentQuestionIndex + 1} / ${topic.quizzes.length}</span>
             </div>
+            <div style="height:4px; background:var(--border); border-radius:2px; margin-bottom:1.5rem;">
+                <div style="height:100%; width:${pct}%; background:var(--primary); border-radius:2px; transition:width 0.3s;"></div>
+            </div>
             <div class="card quiz-card">
                 <p class="question-text">${question.q}</p>
                 <div class="quiz-options">
-                    ${question.type === 'mcq' ? 
-                        question.options.map((opt, i) => `
-                            <button class="option-btn" onclick="window.submitAnswer(${i})">${opt}</button>
-                        `).join('') :
-                        `<input type="text" id="fib-answer" placeholder="Javobni yozing..." class="fib-input">
-                         <button class="primary-btn" onclick="window.submitAnswer(document.getElementById('fib-answer').value)">Yuborish</button>`
+                    ${question.type === 'mcq'
+                        ? question.options.map((opt, i) =>
+                            `<button class="option-btn" onclick="window.submitAnswer(${i})">${opt}</button>`
+                          ).join('')
+                        : `<input type="text" id="fib-answer" placeholder="Javobni yozing..." class="fib-input" autofocus>
+                           <button class="primary-btn" style="margin-top:1rem; width:100%;"
+                               onclick="window.submitAnswer(document.getElementById('fib-answer').value)">Yuborish ✓</button>`
                     }
                 </div>
             </div>
         </div>
     `;
+
+    // Allow Enter for FIB
+    if (question.type === 'fib') {
+        setTimeout(() => {
+            document.getElementById('fib-answer')?.addEventListener('keydown', e => {
+                if (e.key === 'Enter') window.submitAnswer(document.getElementById('fib-answer').value);
+            });
+        }, 50);
+    }
 }
+window.renderCurrentQuestion = renderCurrentQuestion;
 
 function submitAnswer(answer) {
     const { topic, currentQuestionIndex } = currentQuizState;
     const question = topic.quizzes[currentQuestionIndex];
-    let isCorrect = false;
+    const isCorrect = question.type === 'mcq'
+        ? answer === question.correct
+        : String(answer).trim().toLowerCase() === String(question.correct).toLowerCase();
 
-    if (question.type === 'mcq') {
-        isCorrect = (answer === question.correct);
-    } else {
-        isCorrect = (String(answer).trim().toLowerCase() === String(question.correct).toLowerCase());
-    }
+    // Brief visual feedback
+    const container = document.getElementById('view-container');
+    const flash = document.createElement('div');
+    flash.style = `position:fixed; top:0; left:0; right:0; bottom:0; z-index:999; pointer-events:none;
+        background:${isCorrect ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.15)'};
+        animation: fadeIn 0.1s ease;`;
+    document.body.appendChild(flash);
+    setTimeout(() => flash.remove(), 300);
 
-    if (isCorrect) {
-        currentQuizState.score++;
-    }
-
+    if (isCorrect) currentQuizState.score++;
+    currentQuizState.answers.push({ question: question.q, correct: isCorrect });
     currentQuizState.currentQuestionIndex++;
+
     if (currentQuizState.currentQuestionIndex < topic.quizzes.length) {
         renderCurrentQuestion();
     } else {
@@ -409,56 +531,86 @@ function submitAnswer(answer) {
 
 function finishQuiz() {
     const { topic, score } = currentQuizState;
-    const finalPercent = Math.round((score / topic.quizzes.length) * 100);
-    const container = document.getElementById('view-container');
-    
-    // Update progress
+    const total        = topic.quizzes.length;
+    const finalPercent = Math.round((score / total) * 100);
+    const container    = document.getElementById('view-container');
+    const earnedXP     = score * 10;
+
     if (finalPercent > (state.progress[topic.id] || 0)) {
         state.progress[topic.id] = finalPercent;
     }
 
-    // Unlock next topic if score >= 70%
     if (finalPercent >= 70) {
-        const currentIndex = topics.findIndex(t => t.id === topic.id);
-        if (currentIndex < topics.length - 1) {
-            const nextTopic = topics[currentIndex + 1];
+        const currentIndex = state.topics.findIndex(t => t.id === topic.id);
+        if (currentIndex < state.topics.length - 1) {
+            const nextTopic = state.topics[currentIndex + 1];
             if (!state.unlockedTopics.includes(nextTopic.id)) {
                 state.unlockedTopics.push(nextTopic.id);
             }
         }
     }
 
-    const earnedXP = score * 10;
     addXP(earnedXP);
 
     container.innerHTML = `
         <div class="quiz-result fade-in card text-center">
-            <h1>Natija: ${finalPercent}%</h1>
-            <p>${finalPercent >= 70 ? 'Ajoyib! Siz mavzuni muvaffaqiyatli topshirdingiz. 🎉' : 'Yana bir bor urinib ko\'ring! 💪'}</p>
-            <div class="result-stats">
-                <div class="stat"><span>To\'g\'ri javoblar:</span> <strong>${score} / ${topic.quizzes.length}</strong></div>
-                <div class="stat"><span>XP to\'pladingiz:</span> <strong>+${earnedXP}</strong></div>
+            <div style="font-size:4rem; margin-bottom:1rem;">${finalPercent >= 70 ? '🎉' : '💪'}</div>
+            <h1 style="font-size:3rem; margin-bottom:0.5rem;">${finalPercent}%</h1>
+            <p style="font-size:1.2rem; margin-bottom:2rem;">
+                ${finalPercent >= 70 ? 'Ajoyib! Mavzuni muvaffaqiyatli topshirdingiz.' : 'Yana bir bor urinib ko\'ring!'}
+            </p>
+            <div class="result-stats" style="display:flex; justify-content:center; gap:2rem; margin-bottom:2rem; flex-wrap:wrap;">
+                <div class="stat card" style="padding:1rem 2rem;">
+                    <span style="display:block; font-size:0.85rem; color:var(--text-muted);">To'g'ri javoblar</span>
+                    <strong style="font-size:1.5rem;">${score} / ${total}</strong>
+                </div>
+                <div class="stat card" style="padding:1rem 2rem;">
+                    <span style="display:block; font-size:0.85rem; color:var(--text-muted);">XP to'pladingiz</span>
+                    <strong style="font-size:1.5rem; color:var(--primary);">+${earnedXP}</strong>
+                </div>
             </div>
-            <button class="primary-btn" onclick="appNavigate('topics')">Mavzularga qaytish</button>
+            ${finalPercent >= 70 && state.topics.findIndex(t => t.id === topic.id) < state.topics.length - 1 ? `
+                <p style="font-size:0.9rem; color:var(--success,#22c55e); margin-bottom:1rem;">
+                    ✅ Keyingi mavzu ochildi!
+                </p>` : ''}
+            <div style="display:flex; gap:1rem; justify-content:center; flex-wrap:wrap;">
+                ${finalPercent < 70 ? `<button class="primary-btn" onclick="window.startQuiz('${topic.id}')">Qayta urinish 🔄</button>` : ''}
+                <button class="primary-btn" style="background:var(--border); color:var(--text-main);" onclick="appNavigate('topics')">Mavzularga qaytish</button>
+            </div>
         </div>
     `;
-    saveLocalData();
 }
 
+// ─── Videos ────────────────────────────────────────────────────────────────
+
 function renderVideos() {
-    const container = document.getElementById('view-container');
+    const container    = document.getElementById('view-container');
+    const topicsWithVideos = state.topics.filter(t => t.videos?.length > 0);
+
+    if (topicsWithVideos.length === 0) {
+        container.innerHTML = `<div class="fade-in card" style="text-align:center; padding:3rem;">
+            <p style="font-size:2rem;">🎥</p>
+            <p style="color:var(--text-muted)">Hozircha videolar qo'shilmagan.</p>
+        </div>`;
+        return;
+    }
+
     container.innerHTML = `
         <div class="fade-in">
             <h1 class="view-title">Video Darslar 🎥</h1>
             <div class="grid">
-                ${topics.map(topic => `
+                ${topicsWithVideos.map(topic => `
                     <div class="card video-card">
-                        <h3>${topic.title}</h3>
+                        <h3>${topic.icon} ${topic.title}</h3>
                         ${topic.videos.map(video => `
-                            <div class="video-item">
-                                <iframe width="100%" height="200" src="${video.url}" frameborder="0" allowfullscreen></iframe>
-                                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
-                                    <span>${video.title}</span>
+                            <div class="video-item" style="margin-top:1rem;">
+                                <iframe width="100%" height="200"
+                                    src="${video.url}"
+                                    frameborder="0" allowfullscreen
+                                    style="border-radius:var(--radius-md);">
+                                </iframe>
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                                    <span style="font-weight:500; font-size:0.9rem;">${video.title}</span>
                                     <button class="primary-btn btn-sm" onclick="window.rewardVideo('${video.xp}')">+${video.xp} XP</button>
                                 </div>
                             </div>
@@ -472,58 +624,106 @@ function renderVideos() {
 
 function rewardVideo(xp) {
     addXP(parseInt(xp));
-    alert(`${xp} XP sovg'a qilindi!`);
+    const banner = document.createElement('div');
+    banner.style = `position:fixed; top:20px; left:50%; transform:translateX(-50%);
+        background:var(--primary); color:white; padding:0.8rem 1.5rem;
+        border-radius:var(--radius-full); font-weight:700; z-index:9999;`;
+    banner.textContent = `+${xp} XP to'plandi! ✨`;
+    document.body.appendChild(banner);
+    setTimeout(() => banner.remove(), 2000);
 }
 
-function renderLeaderboard() {
+// ─── Leaderboard ───────────────────────────────────────────────────────────
+
+async function renderLeaderboard() {
     const container = document.getElementById('view-container');
-    container.innerHTML = `
-        <div class="fade-in card">
+    container.innerHTML = `<div class="fade-in card"><h2>🏆 Top O'quvchilar</h2><p style="color:var(--text-muted)">Yuklanmoqda...</p></div>`;
+
+    try {
+        const { data, error } = await supabaseClient
+            .from('student_progress')
+            .select('student_id, name, xp, level')
+            .order('xp', { ascending: false })
+            .limit(20);
+
+        if (error) throw error;
+
+        const myId = authState.user.uid;
+        const rows = (data || []).map((p, i) => {
+            const isMe  = p.student_id === myId;
+            const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}`;
+            return `<tr class="${isMe ? 'highlight' : ''}">
+                <td style="font-size:1.1rem;">${medal}</td>
+                <td>${isMe ? `<strong>${p.name || 'Siz'}</strong> 👈` : (p.name || 'O\'quvchi')}</td>
+                <td><strong>${p.xp}</strong> XP</td>
+                <td>${p.level}-daraja</td>
+            </tr>`;
+        }).join('');
+
+        container.innerHTML = `
+            <div class="fade-in card">
+                <h2>🏆 Top O'quvchilar</h2>
+                <p style="color:var(--text-muted); margin-bottom:1.5rem;">Umumiy ${data?.length || 0} ta o'quvchi</p>
+                <table class="leaderboard-table">
+                    <thead><tr><th>O'rin</th><th>Ism</th><th>XP</th><th>Daraja</th></tr></thead>
+                    <tbody>${rows || '<tr><td colspan="4" style="text-align:center; padding:2rem; color:var(--text-muted)">Hali hech kim yo\'q</td></tr>'}</tbody>
+                </table>
+            </div>
+        `;
+    } catch (e) {
+        container.innerHTML = `<div class="fade-in card">
             <h2>🏆 Top O'quvchilar</h2>
-            <p>Eng yaxshi bilimdonlar ro'yxati</p>
-            <table class="leaderboard-table">
-                <thead>
-                    <tr><th>O'rin</th><th>Ism</th><th>XP</th></tr>
-                </thead>
-                <tbody>
-                    <tr class="highlight"><td>1</td><td>Siz (${state.user.name})</td><td>${state.xp}</td></tr>
-                    <tr><td>2</td><td>Azizbek</td><td>1250</td></tr>
-                    <tr><td>3</td><td>Dilnoza</td><td>980</td></tr>
-                    <tr><td>4</td><td>Mirodil</td><td>750</td></tr>
-                </tbody>
-            </table>
-        </div>
-    `;
+            <p style="color:var(--danger)">Yuklab bo'lmadi. Internet aloqasini tekshiring.</p>
+        </div>`;
+    }
 }
+
+// ─── Profile ───────────────────────────────────────────────────────────────
 
 function renderProfile() {
-    const container = document.getElementById('view-container');
+    const container  = document.getElementById('view-container');
+    const topicsDone = Object.values(state.progress).filter(p => p >= 70).length;
+
     container.innerHTML = `
         <div class="fade-in profile-view">
             <div class="card profile-header-card">
                 <div class="large-avatar">👤</div>
                 <h2>${state.user.name}</h2>
-                <p>O'quvchi | ${state.level}-daraja</p>
+                <p>${authState.user?.email || ''}</p>
+                <p style="margin-top:0.3rem; color:var(--text-muted);">${state.level}-daraja o'quvchi</p>
             </div>
-            <div class="grid" style="margin-top: 2rem;">
+
+            <div class="grid" style="margin-top:2rem;">
                 <div class="card">
                     <h3>🎖 Yutuqlar</h3>
-                    <div class="badges-container">
-                        ${state.xp > 0 ? '<span class="badge" title="Birinchi qadam">🎯</span>' : ''}
-                        ${state.level > 1 ? '<span class="badge" title="Bilimdon">🌟</span>' : ''}
-                        ${Object.keys(state.progress).length > 2 ? '<span class="badge" title="Matematik">🎓</span>' : ''}
+                    <div class="badges-container" style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-top:1rem;">
+                        ${state.xp > 0    ? '<span class="badge" title="Birinchi qadam">🎯 Birinchi qadam</span>' : ''}
+                        ${state.level > 1 ? '<span class="badge" title="Bilimdon">🌟 Bilimdon</span>' : ''}
+                        ${topicsDone >= 3 ? '<span class="badge" title="Matematik">🎓 Matematik</span>' : ''}
+                        ${state.xp >= 500 ? '<span class="badge" title="XP Chempioni">🏅 XP Chempioni</span>' : ''}
+                        ${state.xp === 0 && state.level === 1 ? '<p style="color:var(--text-muted); font-size:0.9rem;">Yutuqlarni qo\'lga kiriting!</p>' : ''}
                     </div>
                 </div>
                 <div class="card">
                     <h3>📈 Statistika</h3>
-                    <p>To'plangan XP: <strong>${state.xp}</strong></p>
-                    <p>Faollik: <strong>${state.streak} kun</strong></p>
+                    <div style="display:flex; flex-direction:column; gap:0.8rem; margin-top:1rem;">
+                        <div style="display:flex; justify-content:space-between;">
+                            <span>To'plangan XP</span><strong>${state.xp}</strong>
+                        </div>
+                        <div style="display:flex; justify-content:space-between;">
+                            <span>Daraja</span><strong>${state.level}</strong>
+                        </div>
+                        <div style="display:flex; justify-content:space-between;">
+                            <span>Yakunlangan mavzular</span><strong>${topicsDone} / ${state.topics.length}</strong>
+                        </div>
+                        <div style="display:flex; justify-content:space-between;">
+                            <span>Faollik</span><strong>${state.streak} kun 🔥</strong>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     `;
 }
-
-// Global helpers moved to initStudentPanel
 
 })(); // End of Student Namespace

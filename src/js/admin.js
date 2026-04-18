@@ -1,18 +1,17 @@
 (function() {
-// 2. App State
+
 const state = {
     user: { name: 'Admin', id: 'admin' },
     currentPage: 'dashboard',
     xp: 0,
     level: 1,
     streak: 0,
-    progress: {}, 
+    progress: {},
     unlockedTopics: [],
     topics: [],
     materials: {}
 };
 
-// 3. App Logic
 const routes = {
     dashboard: renderDashboard,
     topics: renderTopics,
@@ -30,35 +29,119 @@ let currentQuizState = {
     answers: []
 };
 
+// ─── Init ──────────────────────────────────────────────────────────────────
+
 async function initAdminPanel() {
     try {
-        console.log("Admin Panel initializing...");
-        window.appNavigate = navigate;
-        window.startQuiz = (id) => navigate('quiz', id);
-        window.submitAnswer = submitAnswer;
-        window.rewardVideo = rewardVideo;
-        window.triggerUpload = triggerUpload;
-        window.openEditTopic = openEditTopic;
-        window.saveTopicEdit = saveTopicEdit;
-        window.removeMaterial = removeMaterial;
-        window.addQuestion = addQuestion;
-        window.toggleQuizOptions = toggleQuizOptions;
-        
+        // Sync user info from auth
+        if (authState.user) {
+            state.user.name = authState.user.name || 'Admin';
+            state.user.id   = authState.user.uid;
+        }
+
+        window.appNavigate         = navigate;
+        window.startQuiz           = (id) => navigate('quiz', id);
+        window.submitAnswer        = submitAnswer;
+        window.rewardVideo         = rewardVideo;
+        window.triggerUpload       = triggerUpload;
+        window.openEditTopic       = openEditTopic;
+        window.saveTopicEdit       = saveTopicEdit;
+        window.removeMaterial      = removeMaterial;
+        window.addQuestion         = addQuestion;
+        window.toggleQuizOptions   = toggleQuizOptions;
+        window.renderCurrentQuestion = renderCurrentQuestion;  // FIX: expose to window
+
         renderAdminLayout();
         showLoading();
-        await loadLocalData();
+        await loadData();
         setupNavigation();
         setupThemeToggle();
         updateHeaderStats();
         hideLoading();
-        console.log("Admin ready. Navigating to dashboard.");
         navigate('dashboard');
     } catch (e) {
-        console.error("Initialization error:", e);
+        console.error("Admin init error:", e);
         hideLoading();
         navigate('dashboard');
     }
 }
+window.initAdminPanel = initAdminPanel;
+
+// ─── Data ──────────────────────────────────────────────────────────────────
+
+async function loadData() {
+    try {
+        const { data, error } = await supabaseClient
+            .from('topics')
+            .select('*')
+            .order('sort_order', { ascending: true });
+
+        if (error) throw error;
+
+        state.topics    = (data || []).map(t => ({
+            id:      t.id,
+            title:   t.title,
+            icon:    t.icon    || '📚',
+            theory:  t.theory  || '',
+            quizzes: t.quizzes || [],
+            videos:  t.videos  || []
+        }));
+        state.materials = {};
+        (data || []).forEach(t => { state.materials[t.id] = t.materials || []; });
+        state.unlockedTopics = state.topics.map(t => t.id);
+
+        // Local cache for offline
+        _cacheLocally();
+    } catch (e) {
+        console.warn("Supabase load failed, using local cache:", e);
+        const cached = localStorage.getItem('mq_admin_v2');
+        if (cached) {
+            const d = JSON.parse(cached);
+            state.topics         = d.topics         || [];
+            state.materials      = d.materials      || {};
+            state.unlockedTopics = d.unlockedTopics || state.topics.map(t => t.id);
+        }
+    }
+}
+
+async function saveData() {
+    _cacheLocally();
+    try {
+        if (state.topics.length === 0) { updateSyncTime(); return; }
+
+        const rows = state.topics.map((t, idx) => ({
+            id:         t.id,
+            title:      t.title,
+            icon:       t.icon    || '📚',
+            theory:     t.theory  || '',
+            quizzes:    t.quizzes || [],
+            videos:     t.videos  || [],
+            materials:  state.materials[t.id] || [],
+            sort_order: idx,
+            updated_at: new Date().toISOString()
+        }));
+
+        const { error } = await supabaseClient.from('topics').upsert(rows);
+        if (error) throw error;
+        updateSyncTime();
+    } catch (e) {
+        console.error("Cloud save error:", e);
+        updateSyncTime('⚠️ Faqat mahalliy saqlandi');
+    }
+}
+
+function _cacheLocally() {
+    localStorage.setItem('mq_admin_v2', JSON.stringify({
+        topics:         state.topics,
+        materials:      state.materials,
+        unlockedTopics: state.unlockedTopics
+    }));
+}
+
+// Kept for backward compat (called from many places)
+const saveLocalData = saveData;
+
+// ─── Layout ────────────────────────────────────────────────────────────────
 
 function renderAdminLayout() {
     const app = document.getElementById('app');
@@ -81,12 +164,11 @@ function renderAdminLayout() {
                 <span class="icon">🌙</span>
             </div>
         </nav>
-
         <main class="content">
             <header class="top-bar">
                 <div class="mobile-menu-btn" id="mobile-menu-btn">☰</div>
                 <div class="user-profile-summary">
-                    <span id="header-username">O'qituvchi</span>
+                    <span id="header-username">${state.user.name}</span>
                     <div class="header-avatar">👤</div>
                 </div>
             </header>
@@ -94,204 +176,66 @@ function renderAdminLayout() {
         </main>
     `;
 }
-window.initAdminPanel = initAdminPanel;
 
-async function loadLocalData() {
-    try {
-        console.log("Loading data from LocalStorage...");
-        const localDataRaw = localStorage.getItem('mq_admin_v2');
-        if (localDataRaw) {
-            const data = JSON.parse(localDataRaw);
-            state.xp = data.xp || 0;
-            state.level = data.level || 1;
-            state.streak = data.streak || 0;
-            state.progress = data.progress || {};
-            state.unlockedTopics = data.unlockedTopics || [];
-            state.topics = data.topics || (typeof topics !== 'undefined' ? topics : []);
-            state.materials = data.materials || {};
-        } else {
-            // Default to content.js if no local data
-            state.topics = (typeof topics !== 'undefined' ? JSON.parse(JSON.stringify(topics)) : []);
-            state.unlockedTopics = state.topics.map(t => t.id);
-        }
-
-        // DEEP SCAN RECOVERY: If topics is empty, user might have lost data during Firebase removal.
-        if (!state.topics || state.topics.length === 0) {
-            const possibleKeys = ['mathquest_admin_v1', 'mathquest_v1', 'mathquest_data', 'mq_admin_v1', 'firebase_backup'];
-            for (let key of possibleKeys) {
-                const oldDataRaw = localStorage.getItem(key);
-                if (oldDataRaw) {
-                    try {
-                        const parsed = JSON.parse(oldDataRaw);
-                        const topicsToRecover = parsed.topics || (Array.isArray(parsed) ? parsed : null);
-                        if (topicsToRecover && topicsToRecover.length > 0) {
-                            state.topics = topicsToRecover;
-                            state.materials = parsed.materials || state.materials;
-                            state.xp = parsed.xp || state.xp;
-                            state.level = parsed.level || state.level;
-                            state.unlockedTopics = parsed.unlockedTopics || state.topics.map(t => t.id);
-                            
-                            await saveLocalData();
-                            console.log(`Recovered data from key: ${key}`);
-                            // Alert will be shown after loading finishes usually, but let's just quietly load it.
-                            break;
-                        }
-                    } catch(e) {}
-                }
-            }
-        }
-    } catch (e) {
-        console.error("Local load error", e);
-    }
-}
-
-async function saveLocalData() {
-    try {
-        localStorage.setItem('mq_admin_v2', JSON.stringify({
-            xp: state.xp,
-            level: state.level,
-            streak: state.streak,
-            progress: state.progress,
-            unlockedTopics: state.unlockedTopics,
-            topics: state.topics,
-            materials: state.materials
-        }));
-        updateSyncTime();
-    } catch (e) {
-        console.error("Local save error", e);
-    }
-}
-
-function exportToGithub() {
-    const data = {
-        topics: state.topics,
-        materials: state.materials
-    };
-    const blob = JSON.stringify(data, null, 4);
-    
-    // Simple way to show the data to the user
-    const modal = document.createElement('div');
-    modal.style = "position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.8); z-index:10000; display:flex; align-items:center; justify-content:center; padding:2rem;";
-    modal.innerHTML = `
-        <div class="card" style="max-width:800px; width:100%; max-height:90vh; overflow-y:auto; padding:2rem;">
-            <h2 style="margin-bottom:1rem;">GitHub'ga yuklash uchun kod 🚀</h2>
-            <p style="margin-bottom:1.5rem; color:var(--text-muted);">Quyidagi kodni nusxalang va Antigravity'ga yuboring. Men uni GitHub'ga yuklab qo'yaman.</p>
-            <textarea id="export-code" style="width:100%; height:300px; background:var(--bg-main); color:var(--text-main); border:1px solid var(--border); border-radius:8px; padding:1rem; font-family:monospace; margin-bottom:1.5rem;">${blob}</textarea>
-            <div style="display:flex; gap:1rem; justify-content:flex-end;">
-                <button class="primary-btn" style="background:var(--border); color:var(--text-main)" onclick="this.closest('div').parentElement.parentElement.remove()">Yopish</button>
-                <button class="primary-btn" onclick="document.getElementById('export-code').select(); document.execCommand('copy'); alert('Kod nusxalandi! Endi uni Antigravityga yuboring.')">Nusxalash</button>
-            </div>
-        </div>
-    `;
-    document.body.appendChild(modal);
-}
-window.exportToGithub = exportToGithub;
-
-function updateSyncTime() {
-    const el = document.getElementById('sync-time');
-    if (el) {
-        const now = new Date();
-        el.textContent = `Oxirgi sinxronizatsiya: ${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
-    }
-}
-
-async function removeTopic(topicId) {
-    if (confirm("Ushbu mavzuni butunlay o'chirib tashlamoqchimisiz? Barcha nazariya va testlar o'chib ketadi!")) {
-        showLoading();
-        state.topics = state.topics.filter(t => t.id !== topicId);
-        state.unlockedTopics = state.unlockedTopics.filter(id => id !== topicId);
-        delete state.materials[topicId];
-        delete state.progress[topicId];
-        
-        try {
-            await saveLocalData();
-            hideLoading();
-            renderTopics();
-            alert("Mavzu muvaffaqiyatli o'chirildi! 🗑️");
-        } catch (e) {
-            hideLoading();
-        }
-    }
-}
-window.removeTopic = removeTopic;
-
-async function restoreFromClipboard() {
-    const dataRaw = prompt("Iltimos, avvaldan nusxalangan ma'lumotni shu yerga qo'ying (Paste):");
-    if (dataRaw) {
-        try {
-            const parsed = JSON.parse(dataRaw);
-            const topicsToMigrate = parsed.topics || (Array.isArray(parsed) ? parsed : null);
-            if (topicsToMigrate && topicsToMigrate.length > 0) {
-                state.topics = topicsToMigrate;
-                state.xp = parsed.xp || 0;
-                state.level = parsed.level || 1;
-                state.materials = parsed.materials || {};
-                state.unlockedTopics = parsed.unlockedTopics || state.topics.map(t => t.id);
-                
-                await saveLocalData();
-                alert("Ma'lumotlar muvaffaqiyatli saqlandi! ✅");
-                renderTopics();
-            } else {
-                alert("Xatolik: Ma'lumot formati noto'g'ri.");
-            }
-        } catch (e) {
-            alert("Xatolik: Matnni o'qib bo'lmadi. JSON formatida ekanligiga ishonch hosil qiling.");
-        }
-    }
-}
-window.restoreFromClipboard = restoreFromClipboard;
+// ─── Navigation & helpers ─────────────────────────────────────────────────
 
 function setupNavigation() {
-    const navItems = document.querySelectorAll('.nav-links li');
+    const navItems = document.querySelectorAll('.nav-links li[data-page]');
     navItems.forEach(item => {
         item.addEventListener('click', () => {
             const page = item.getAttribute('data-page');
-            navigate(page);
-            
+            if (!page) return;
             navItems.forEach(i => i.classList.remove('active'));
             item.classList.add('active');
+            navigate(page);
         });
     });
-
     const mobileBtn = document.getElementById('mobile-menu-btn');
-    const sidebar = document.querySelector('.sidebar');
-    if (mobileBtn) {
-        mobileBtn.addEventListener('click', () => {
-            sidebar.classList.toggle('active');
-        });
-    }
+    const sidebar   = document.querySelector('.sidebar');
+    if (mobileBtn) mobileBtn.addEventListener('click', () => sidebar.classList.toggle('active'));
 }
 
 function navigate(page, params = null) {
     if (routes[page]) {
         state.currentPage = page;
         routes[page](params);
-        document.querySelector('.sidebar').classList.remove('active');
+        document.querySelector('.sidebar')?.classList.remove('active');
         window.scrollTo(0, 0);
     }
 }
 
 function setupThemeToggle() {
     const toggle = document.getElementById('theme-toggle');
-    if (toggle) {
-        toggle.addEventListener('click', () => {
-            document.body.classList.toggle('dark-theme');
-            const icon = toggle.querySelector('.icon');
-            if (icon) icon.textContent = document.body.classList.contains('dark-theme') ? '☀️' : '🌙';
-        });
+    if (!toggle) return;
+
+    // Restore saved theme
+    const saved = localStorage.getItem('mq_theme');
+    if (saved === 'dark-theme') {
+        document.body.classList.add('dark-theme');
+        toggle.querySelector('.icon').textContent = '☀️';
     }
+
+    toggle.addEventListener('click', () => {
+        document.body.classList.toggle('dark-theme');
+        const isDark = document.body.classList.contains('dark-theme');
+        toggle.querySelector('.icon').textContent = isDark ? '☀️' : '🌙';
+        localStorage.setItem('mq_theme', isDark ? 'dark-theme' : '');
+    });
 }
 
 function updateHeaderStats() {
-    const xp = document.getElementById('xp-value');
-    const level = document.getElementById('level-value');
-    const streak = document.getElementById('streak-value');
-    if (xp) xp.textContent = state.xp;
-    if (level) level.textContent = state.level;
-    if (streak) streak.textContent = state.streak;
+    const el = document.getElementById('header-username');
+    if (el) el.textContent = state.user.name;
 }
 
-// Loading functions removed, now using centralized window.showLoading/hideLoading from auth.js
+function updateSyncTime(customText) {
+    const el = document.getElementById('sync-time');
+    if (el) {
+        if (customText) { el.textContent = customText; return; }
+        const now = new Date();
+        el.textContent = `✅ Saqlandi: ${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
+    }
+}
 
 async function addXP(amount) {
     state.xp += amount;
@@ -300,183 +244,106 @@ async function addXP(amount) {
         state.level = newLevel;
         alert(`Tabriklaymiz! Siz ${newLevel}-darajaga chiqdingiz! 🎊`);
     }
-    updateHeaderStats();
-    await saveLocalData();
+    await saveData();
 }
 
-// Admin Topic Management
-async function addTopic() {
-    const title = document.getElementById('new-topic-title').value;
-    
-    if (!title) return alert("Mavzu nomini kiriting!");
-    
-    showLoading();
-    const id = title.toLowerCase().replace(/[^a-z0-9]/g, '_');
-    const newTopic = {
-        id: id,
-        title: title,
-        icon: '📚',
-        theory: 'Ushbu mavzu uchun nazariya hali qo\'shilmagan.'
-    };
-
-    state.topics.push(newTopic);
-    state.unlockedTopics.push(id);
-
-    // Process all attached files
-    const files = document.getElementById('new-topic-materials').files;
-    state.materials[id] = [];
-    
-    for (let file of files) {
-        const type = file.name.endsWith('.pdf') ? 'pdf' : (file.name.endsWith('.ppt') || file.name.endsWith('.pptx')) ? 'ppt' : 'doc';
-        state.materials[id].push({
-            name: file.name,
-            type: type,
-            url: '#' // Note: physical binary storage requires Firebase Storage
-        });
-    }
-
-    try {
-        await saveLocalData();
-        hideLoading();
-        renderTopics();
-        alert("Yangi mavzu va fayllar muvaffaqiyatli saqlandi! ✅");
-    } catch (e) {
-        hideLoading();
-    }
-}
-window.addTopic = addTopic;
-
-// Simulated Physical Upload
-async function triggerUpload(topicId, type) {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = type === 'pdf' ? '.pdf' : type === 'doc' ? '.doc,.docx' : '.ppt,.pptx';
-    
-    input.onchange = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        showLoading();
-        const newFile = {
-            name: file.name,
-            type: type,
-            url: '#' 
-        };
-
-        if (!state.materials[topicId]) {
-            state.materials[topicId] = [];
-        }
-        state.materials[topicId].push(newFile);
-        
-        await saveCloudData();
-        hideLoading();
-        renderTopics();
-        alert(`${file.name} muvaffaqiyatli biriktirildi! ✅`);
-    };
-    input.click();
-}
-window.triggerUpload = triggerUpload;
+// ─── Dashboard ─────────────────────────────────────────────────────────────
 
 function renderDashboard() {
-    const container = document.getElementById('view-container');
-    const topicCount = state.topics.length;
-    const materialCount = Object.values(state.materials).reduce((acc, curr) => acc + curr.length, 0);
-    const videoCount = state.topics.reduce((acc, curr) => acc + (curr.videos ? curr.videos.length : 0), 0);
+    const container     = document.getElementById('view-container');
+    const topicCount    = state.topics.length;
+    const materialCount = Object.values(state.materials).reduce((a, c) => a + c.length, 0);
+    const videoCount    = state.topics.reduce((a, t) => a + (t.videos?.length || 0), 0);
+    const quizCount     = state.topics.reduce((a, t) => a + (t.quizzes?.length || 0), 0);
 
     container.innerHTML = `
         <div class="fade-in dashboard-view">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:1rem; margin-bottom:1rem;">
                 <h1 class="view-title" style="margin:0;">Xush kelibsiz, ${state.user.name}! 👋</h1>
-                <span id="sync-time" style="font-size:0.8rem; color:var(--text-muted); background:rgba(var(--primary-rgb), 0.1); padding:0.4rem 0.8rem; border-radius:var(--radius-full);">Mahalliy saqlash 📱</span>
-                <button class="primary-btn btn-sm" onclick="window.exportToGithub()" style="margin-left:1rem;">GitHub'ga yuklash 🚀</button>
+                <span id="sync-time" style="font-size:0.8rem; color:rgba(255,255,255,0.8); background:rgba(255,255,255,0.15); padding:0.4rem 0.8rem; border-radius:var(--radius-full);">Mahalliy saqlash 📱</span>
             </div>
-            <p class="view-subtitle">Bugungi MathQuest statistikangiz va kiritilgan ma'lumotlar:</p>
-            
+            <p class="view-subtitle">MathQuest tizimiga umumiy ko'rinish:</p>
+
             <div class="dashboard-grid grid">
                 <div class="card stat-card">
                     <div class="stat-icon">📚</div>
-                    <div class="stat-info">
-                        <h3>${topicCount}</h3>
-                        <p>Mavzular</p>
-                    </div>
+                    <div class="stat-info"><h3>${topicCount}</h3><p>Mavzular</p></div>
+                </div>
+                <div class="card stat-card">
+                    <div class="stat-icon">📝</div>
+                    <div class="stat-info"><h3>${quizCount}</h3><p>Test savollari</p></div>
                 </div>
                 <div class="card stat-card">
                     <div class="stat-icon">🎥</div>
-                    <div class="stat-info">
-                        <h3>${videoCount}</h3>
-                        <p>Videolar</p>
-                    </div>
+                    <div class="stat-info"><h3>${videoCount}</h3><p>Videolar</p></div>
                 </div>
                 <div class="card stat-card">
                     <div class="stat-icon">📄</div>
-                    <div class="stat-info">
-                        <h3>${materialCount}</h3>
-                        <p>Materiallar</p>
-                    </div>
+                    <div class="stat-info"><h3>${materialCount}</h3><p>Materiallar</p></div>
                 </div>
             </div>
 
             <div class="recent-activity mt-3">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1.5rem;">
-                    <h2>Sizning Mavzularingiz</h2>
+                    <h2>Mavzular</h2>
                     <button class="primary-btn btn-sm" onclick="appNavigate('topics')">Barchasini ko'rish</button>
                 </div>
                 <div class="grid">
                     ${state.topics.slice(0, 4).map(topic => `
-                        <div class="card topic-summary-card" onclick="appNavigate('topics')">
+                        <div class="card topic-summary-card" onclick="appNavigate('topics')" style="cursor:pointer;">
                             <span class="topic-icon-sm">${topic.icon || '📘'}</span>
                             <h4>${topic.title}</h4>
-                            <p>${topic.quizzes ? topic.quizzes.length : 0} ta mashq</p>
+                            <p>${topic.quizzes?.length || 0} ta mashq</p>
                         </div>
                     `).join('')}
-                    ${topicCount === 0 ? '<p style="grid-column: 1/-1; text-align:center; padding:2rem; color:var(--text-muted)">Hozircha mavzular kiritilmagan. "Mavzular" bo\'limidan yangi mavzu qo\'shing.</p>' : ''}
+                    ${topicCount === 0 ? `<p style="grid-column:1/-1; text-align:center; padding:2rem; color:var(--text-muted)">
+                        Hozircha mavzular yo'q. "Mavzular" bo'limidan qo'shing.
+                    </p>` : ''}
                 </div>
             </div>
         </div>
     `;
 }
 
+// ─── Topics ────────────────────────────────────────────────────────────────
+
 function renderTopics() {
     const container = document.getElementById('view-container');
     container.innerHTML = `
         <div class="fade-in">
-            <h1 class="view-title">Admin: Mavzularni boshqarish 🛠️</h1>
-            
-            <!-- Admin: Multi-input Topic Creator -->
+            <h1 class="view-title">Mavzularni boshqarish 🛠️</h1>
+
             <div class="card admin-topic-form">
-                <h3 style="display:flex; align-items:center; gap:0.5rem;"><span class="icon">🆕</span> Yangi mavzu qo'shish</h3>
-                
+                <h3><span class="icon">🆕</span> Yangi mavzu qo'shish</h3>
                 <div class="form-group" style="margin-top:1.5rem;">
                     <label>Mavzu nomi</label>
                     <input type="text" id="new-topic-title" class="form-input" placeholder="Masalan: Foizlar">
                 </div>
-
-                <div class="form-group" style="margin-top:1.5rem;">
-                    <label>📁 O'quv materiallari (PDF/Word/PPT)</label>
+                <div class="form-group" style="margin-top:1rem;">
+                    <label>📁 O'quv materiallari (PDF/Word/PPT) — ixtiyoriy</label>
                     <input type="file" id="new-topic-materials" class="form-input" accept=".pdf,.doc,.docx,.ppt,.pptx" multiple>
-                    <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0.5rem;">Bir vaqtning o'zida bir nechta fayl tanlashingiz mumkin.</p>
                 </div>
-
                 <div class="admin-form-actions">
-                    <button class="primary-btn" onclick="window.addTopic()" style="padding: 0.8rem 2.5rem; font-size: 1rem;">Saqlash</button>
+                    <button class="primary-btn" onclick="window.addTopic()" style="padding:0.8rem 2.5rem;">Saqlash</button>
                 </div>
             </div>
 
-            <div class="topics-grid">
+            <div style="display:flex; flex-direction:column; gap:1rem; margin-top:2rem;">
+                ${state.topics.length === 0 ? `<p style="text-align:center; color:var(--text-muted); padding:2rem;">Hali mavzular qo'shilmagan.</p>` : ''}
                 ${state.topics.map(topic => {
-                    const isUnlocked = state.unlockedTopics.includes(topic.id);
-                    const progress = state.progress[topic.id] || 0;
-                    const materials = state.materials ? state.materials[topic.id] || [] : [];
-                    
+                    const materials = state.materials[topic.id] || [];
                     return `
-                        <div class="card topic-card ${isUnlocked ? '' : 'locked'}" style="padding: 1.5rem;">
-                            <div class="topic-info-main">
-                                <div style="display:flex; justify-content:space-between; align-items:center;">
-                                    <h3 style="font-size:1.6rem; margin:0; font-weight:700; color:var(--text-main)">${topic.title}</h3>
-                                    <div style="display:flex; gap:0.5rem;">
-                                        <button class="btn-icon" onclick="window.openEditTopic('${topic.id.replace(/'/g, "\\'")}')" title="Tahrirlash" style="font-size:1.2rem; background:rgba(var(--primary-rgb), 0.1); border-radius:8px; padding:0.5rem;">✏️</button>
-                                        <button class="btn-icon" onclick="window.removeTopic('${topic.id.replace(/'/g, "\\'")}')" title="O'chirish" style="font-size:1.2rem; background:rgba(239, 68, 68, 0.1); color:var(--danger); border-radius:8px; padding:0.5rem;">🗑️</button>
-                                    </div>
+                        <div class="card topic-list-item">
+                            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem;">
+                                <div>
+                                    <h3 style="margin:0; font-weight:700;">${topic.icon} ${topic.title}</h3>
+                                    <p style="font-size:0.85rem; color:var(--text-muted); margin-top:0.3rem;">
+                                        ${topic.quizzes?.length || 0} savol · ${topic.videos?.length || 0} video · ${materials.length} material
+                                    </p>
+                                </div>
+                                <div style="display:flex; gap:0.5rem; flex-shrink:0;">
+                                    <button class="btn-icon" onclick="window.openEditTopic('${_esc(topic.id)}')" title="Tahrirlash" style="font-size:1.2rem; background:rgba(var(--primary-rgb),0.1); border-radius:8px; padding:0.5rem;">✏️</button>
+                                    <button class="btn-icon" onclick="window.removeTopic('${_esc(topic.id)}')" title="O'chirish" style="font-size:1.2rem; background:rgba(239,68,68,0.1); color:var(--danger); border-radius:8px; padding:0.5rem;">🗑️</button>
                                 </div>
                             </div>
                         </div>
@@ -487,132 +354,212 @@ function renderTopics() {
     `;
 }
 
-function renderQuiz(topicId) {
-    const topic = state.topics.find(t => t.id === topicId);
-    if (!topic) return;
+async function addTopic() {
+    const titleInput = document.getElementById('new-topic-title');
+    const title = titleInput.value.trim();
+    if (!title) return alert("Mavzu nomini kiriting!");
 
-    currentQuizState = { topic, currentQuestionIndex: 0, score: 0, answers: [] };
-    
-    const container = document.getElementById('view-container');
-    container.innerHTML = `
-        <div class="theory-view fade-in card">
-            <h2 class="view-title">${topic.title}: Nazariya 📖</h2>
-            <div class="theory-content" style="font-size:1.2rem; margin:2rem 0; line-height:1.8;">
-                <p>${topic.theory}</p>
-            </div>
-            <div class="theory-actions">
-                <button class="primary-btn" onclick="window.renderCurrentQuestion()">Mashqni boshlash 🚀</button>
-                <button class="primary-btn" style="background:var(--border); color:var(--text-main)" onclick="appNavigate('topics')">Orqaga</button>
-            </div>
-        </div>
-    `;
+    // Generate unique ID: slug + timestamp
+    const slug = title.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '').slice(0, 20);
+    const id   = `${slug}_${Date.now().toString(36)}`;
+
+    if (state.topics.find(t => t.id === id)) {
+        return alert("Bu ID allaqachon mavjud. Qayta urining.");
+    }
+
+    showLoading();
+    const newTopic = { id, title, icon: '📚', theory: '', quizzes: [], videos: [] };
+    state.topics.push(newTopic);
+    state.unlockedTopics.push(id);
+
+    const files = document.getElementById('new-topic-materials').files;
+    state.materials[id] = [];
+    for (const file of files) {
+        const type = _fileType(file.name);
+        state.materials[id].push({ name: file.name, type, url: '#' });
+    }
+
+    try {
+        await saveData();
+        titleInput.value = '';
+        document.getElementById('new-topic-materials').value = '';
+        hideLoading();
+        renderTopics();
+        alert("Mavzu muvaffaqiyatli saqlandi! ✅");
+    } catch (e) {
+        hideLoading();
+    }
 }
+window.addTopic = addTopic;
 
-function renderCurrentQuestion() {
-    const { topic, currentQuestionIndex } = currentQuizState;
-    const question = topic.quizzes[currentQuestionIndex];
+async function removeTopic(topicId) {
+    if (!confirm("Ushbu mavzuni o'chirib tashlamoqchimisiz? Barcha nazariya va testlar o'chib ketadi!")) return;
+
+    showLoading();
+    state.topics         = state.topics.filter(t => t.id !== topicId);
+    state.unlockedTopics = state.unlockedTopics.filter(id => id !== topicId);
+    delete state.materials[topicId];
+    delete state.progress[topicId];
+
+    try {
+        await saveData();
+        await supabaseClient.from('topics').delete().eq('id', topicId);
+        hideLoading();
+        renderTopics();
+        alert("Mavzu o'chirildi! 🗑️");
+    } catch (e) {
+        hideLoading();
+        console.error(e);
+    }
+}
+window.removeTopic = removeTopic;
+
+function openEditTopic(topicId) {
+    const topic     = state.topics.find(t => t.id === topicId);
+    if (!topic) return;
+    const materials = state.materials[topicId] || [];
     const container = document.getElementById('view-container');
-    
+
     container.innerHTML = `
-        <div class="quiz-view fade-in">
-            <div class="quiz-header">
-                <h2>${topic.title}</h2>
-                <span>Savol ${currentQuestionIndex + 1} / ${topic.quizzes.length}</span>
-            </div>
-            <div class="card quiz-card">
-                <p class="question-text">${question.q}</p>
-                <div class="quiz-options">
-                    ${question.type === 'mcq' ? 
-                        question.options.map((opt, i) => `
-                            <button class="option-btn" onclick="window.submitAnswer(${i})">${opt}</button>
-                        `).join('') :
-                        `<input type="text" id="fib-answer" placeholder="Javobni yozing..." class="fib-input">
-                         <button class="primary-btn" onclick="window.submitAnswer(document.getElementById('fib-answer').value)">Yuborish</button>`
-                    }
+        <div class="fade-in">
+            <h1 class="view-title">Mavzuni tahrirlash: ${topic.title} ✏️</h1>
+
+            <div class="card admin-topic-form">
+                <div class="form-group">
+                    <label>Mavzu nomi</label>
+                    <input type="text" id="edit-topic-title" class="form-input" value="${_escAttr(topic.title)}">
+                </div>
+
+                <div class="form-group" style="margin-top:1.5rem;">
+                    <label>Emoji belgisi</label>
+                    <input type="text" id="edit-topic-icon" class="form-input" value="${topic.icon || '📚'}" style="max-width:120px;">
+                </div>
+
+                <div class="form-group" style="margin-top:1.5rem;">
+                    <label>Nazariya matni (HTML qo'shish mumkin)</label>
+                    <textarea id="edit-topic-theory" class="form-input" rows="6"
+                        style="resize:vertical; font-family:inherit;">${_escHtml(topic.theory || '')}</textarea>
+                </div>
+
+                <div class="form-group" style="margin-top:1.5rem;">
+                    <label>📁 Yangi materiallar qo'shish (PDF/Word/PPT)</label>
+                    <input type="file" id="edit-topic-materials" class="form-input" accept=".pdf,.doc,.docx,.ppt,.pptx" multiple>
+                </div>
+
+                <div class="materials-preview" style="margin-top:1.5rem; padding:1.5rem; background:rgba(var(--primary-rgb),0.05); border-radius:var(--radius-md);">
+                    <h4 style="margin-bottom:1rem;">📁 Joriy materiallar (${materials.length} ta):</h4>
+                    <div class="file-list">
+                        ${materials.length > 0 ? materials.map((f, i) => `
+                            <div class="file-item" style="background:var(--bg-card); border:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; padding:0.8rem; border-radius:8px; margin-bottom:0.5rem;">
+                                <div style="display:flex; align-items:center; gap:0.8rem;">
+                                    <span style="font-size:1.2rem;">${f.type === 'pdf' ? '📄' : f.type === 'doc' ? '📝' : '📊'}</span>
+                                    <span style="font-weight:500;">${f.name}</span>
+                                </div>
+                                <button class="btn-icon" onclick="window.removeMaterial('${_esc(topicId)}',${i})" style="color:var(--danger); padding:5px;">🗑️</button>
+                            </div>
+                        `).join('') : '<p style="font-size:0.9rem; color:var(--text-muted)">Hali material qo\'shilmagan.</p>'}
+                    </div>
+                </div>
+
+                <div style="display:flex; gap:1rem; justify-content:flex-end; margin-top:2rem;">
+                    <button class="primary-btn" style="background:var(--border); color:var(--text-main);" onclick="appNavigate('topics')">Bekor qilish</button>
+                    <button class="primary-btn" onclick="window.saveTopicEdit('${_esc(topicId)}')" style="padding:0.8rem 3rem; font-weight:700;">Saqlash ✅</button>
                 </div>
             </div>
         </div>
     `;
 }
+window.openEditTopic = openEditTopic;
 
-function submitAnswer(answer) {
-    const { topic, currentQuestionIndex } = currentQuizState;
-    const question = topic.quizzes[currentQuestionIndex];
-    let isCorrect = false;
+async function saveTopicEdit(id) {
+    const topic = state.topics.find(t => t.id === id);
+    if (!topic) return;
 
-    if (question.type === 'mcq') {
-        isCorrect = (answer === question.correct);
-    } else {
-        isCorrect = (String(answer).trim().toLowerCase() === String(question.correct).toLowerCase());
+    const newTitle  = document.getElementById('edit-topic-title').value.trim();
+    const newIcon   = document.getElementById('edit-topic-icon').value.trim();
+    const newTheory = document.getElementById('edit-topic-theory').value;
+    const newFiles  = document.getElementById('edit-topic-materials').files;
+
+    if (!newTitle) return alert("Mavzu nomini kiriting!");
+
+    showLoading();
+    topic.title  = newTitle;
+    topic.icon   = newIcon || '📚';
+    topic.theory = newTheory;
+
+    if (!state.materials[id]) state.materials[id] = [];
+    for (const file of newFiles) {
+        state.materials[id].push({ name: file.name, type: _fileType(file.name), url: '#' });
     }
 
-    if (isCorrect) {
-        currentQuizState.score++;
-    }
-
-    currentQuizState.currentQuestionIndex++;
-    if (currentQuizState.currentQuestionIndex < topic.quizzes.length) {
-        renderCurrentQuestion();
-    } else {
-        finishQuiz();
+    try {
+        await saveData();
+        hideLoading();
+        renderTopics();
+        alert("Mavzu yangilandi! ✅");
+    } catch (e) {
+        hideLoading();
     }
 }
+window.saveTopicEdit = saveTopicEdit;
 
-async function finishQuiz() {
-    const { topic, score } = currentQuizState;
-    const finalPercent = Math.round((score / topic.quizzes.length) * 100);
-    const container = document.getElementById('view-container');
-    
-    if (finalPercent > (state.progress[topic.id] || 0)) {
-        state.progress[topic.id] = finalPercent;
+async function removeMaterial(topicId, index) {
+    if (!confirm("Ushbu materialni o'chirmoqchimisiz?")) return;
+    showLoading();
+    state.materials[topicId].splice(index, 1);
+    try {
+        await saveData();
+        hideLoading();
+        openEditTopic(topicId);
+    } catch (e) {
+        hideLoading();
     }
-
-    if (finalPercent >= 70) {
-        const currentIndex = state.topics.findIndex(t => t.id === topic.id);
-        if (currentIndex < state.topics.length - 1) {
-            const nextTopic = state.topics[currentIndex + 1];
-            if (!state.unlockedTopics.includes(nextTopic.id)) {
-                state.unlockedTopics.push(nextTopic.id);
-            }
-        }
-    }
-
-    const earnedXP = score * 10;
-    await addXP(earnedXP);
-
-    container.innerHTML = `
-        <div class="fade-in card text-center">
-            <h1>Natija: ${finalPercent}%</h1>
-            <p>${finalPercent >= 70 ? 'Ajoyib! Siz mavzuni muvaffaqiyatli topshirdingiz. 🎉' : 'Yana bir bor urinib ko\'ring! 💪'}</p>
-            <div class="result-stats">
-                <div class="stat"><span>To\'g\'ri javoblar:</span> <strong>${score} / ${topic.quizzes.length}</strong></div>
-                <div class="stat"><span>XP to\'pladingiz:</span> <strong>+${earnedXP}</strong></div>
-            </div>
-            <button class="primary-btn" onclick="appNavigate('topics')">Mavzularga qaytish</button>
-        </div>
-    `;
-    await saveLocalData();
 }
+window.removeMaterial = removeMaterial;
+
+async function triggerUpload(topicId, type) {
+    const input  = document.createElement('input');
+    input.type   = 'file';
+    input.accept = type === 'pdf' ? '.pdf' : type === 'doc' ? '.doc,.docx' : '.ppt,.pptx';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        showLoading();
+        if (!state.materials[topicId]) state.materials[topicId] = [];
+        state.materials[topicId].push({ name: file.name, type, url: '#' });
+        await saveData();
+        hideLoading();
+        renderTopics();
+        alert(`${file.name} biriktirildi! ✅`);
+    };
+    input.click();
+}
+window.triggerUpload = triggerUpload;
+
+// ─── Videos ────────────────────────────────────────────────────────────────
 
 function renderVideos() {
     const container = document.getElementById('view-container');
     container.innerHTML = `
         <div class="fade-in">
-            <h1 class="view-title">Admin: Video darslarni boshqarish 🎥</h1>
+            <h1 class="view-title">Video darslarni boshqarish 🎥</h1>
 
-            <!-- Admin: Add Video Form -->
-            <div class="card admin-video-form" style="margin-bottom: 2rem;">
-                <h3 style="display:flex; align-items:center; gap:0.5rem;"><span class="icon">➕</span> Yangi video qo'shish</h3>
+            <div class="card admin-video-form" style="margin-bottom:2rem;">
+                <h3><span class="icon">➕</span> Yangi video qo'shish</h3>
                 <div class="form-grid" style="margin-top:1.5rem;">
                     <div class="form-group">
-                        <label>Mavzuni tanlang</label>
+                        <label>Mavzu</label>
                         <select id="video-topic-id" class="form-input">
                             ${state.topics.map(t => `<option value="${t.id}">${t.title}</option>`).join('')}
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>YouTube Link (URL)</label>
+                        <label>YouTube URL</label>
                         <input type="text" id="video-url" class="form-input" placeholder="https://www.youtube.com/watch?v=...">
+                    </div>
+                    <div class="form-group">
+                        <label>Video nomi</label>
+                        <input type="text" id="video-title" class="form-input" placeholder="Video dars nomi">
                     </div>
                 </div>
                 <div class="admin-form-actions">
@@ -625,15 +572,15 @@ function renderVideos() {
                     <div class="card video-card">
                         <h3>${topic.title}</h3>
                         <div style="margin-top:1rem;">
-                            ${topic.videos && topic.videos.length > 0 ? topic.videos.map(video => `
-                                <div class="video-item" style="margin-bottom:2rem; border-bottom:1px solid var(--border); padding-bottom:1rem;">
-                                    <iframe width="100%" height="250" src="${video.url.replace('watch?v=', 'embed/')}" frameborder="0" allowfullscreen style="border-radius:var(--radius-md)"></iframe>
-                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
-                                        <span style="font-weight:600;">${video.title}</span>
-                                        <button class="primary-btn btn-sm" onclick="window.rewardVideo('${video.xp}')">+${video.xp} XP</button>
+                            ${topic.videos?.length > 0 ? topic.videos.map((video, vi) => `
+                                <div class="video-item" style="margin-bottom:1.5rem; border-bottom:1px solid var(--border); padding-bottom:1rem;">
+                                    <iframe width="100%" height="200" src="${_embedUrl(video.url)}" frameborder="0" allowfullscreen style="border-radius:var(--radius-md);"></iframe>
+                                    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
+                                        <span style="font-weight:600; font-size:0.9rem;">${video.title}</span>
+                                        <button class="btn-icon" onclick="window.removeVideo('${_esc(topic.id)}',${vi})" style="color:var(--danger); font-size:1rem;">🗑️</button>
                                     </div>
                                 </div>
-                            `).join('') : '<p style="color:var(--text-muted)">Ushbu mavzu uchun videolar hali yo\'q.</p>'}
+                            `).join('') : '<p style="color:var(--text-muted); font-size:0.9rem;">Videolar yo\'q.</p>'}
                         </div>
                     </div>
                 `).join('')}
@@ -644,104 +591,60 @@ function renderVideos() {
 
 async function addVideo() {
     const topicId = document.getElementById('video-topic-id').value;
-    let url = document.getElementById('video-url').value;
+    const rawUrl  = document.getElementById('video-url').value.trim();
+    const title   = document.getElementById('video-title').value.trim() || 'Video dars';
 
-    if (!topicId || !url) return alert("Barcha maydonlarni to'ldiring!");
+    if (!topicId || !rawUrl) return alert("Barcha maydonlarni to'ldiring!");
 
     showLoading();
-    // Convert regular YouTube link to embed link if needed
-    if (url.includes('watch?v=')) {
-        url = url.replace('watch?v=', 'embed/');
-    } else if (url.includes('youtu.be/')) {
-        url = url.replace('youtu.be/', 'www.youtube.com/embed/');
-    }
-
     const topic = state.topics.find(t => t.id === topicId);
-    if (!topic) return;
-
+    if (!topic) { hideLoading(); return; }
     if (!topic.videos) topic.videos = [];
-    topic.videos.push({
-        title: "Video dars",
-        url: url,
-        xp: 20
-    });
+    topic.videos.push({ title, url: _embedUrl(rawUrl), xp: 20 });
 
     try {
-        await saveLocalData();
+        await saveData();
+        document.getElementById('video-url').value   = '';
+        document.getElementById('video-title').value = '';
         hideLoading();
         renderVideos();
-        alert("Video muvaffaqiyatli qo'shildi! 🎥✅");
+        alert("Video qo'shildi! 🎥✅");
     } catch (e) {
         hideLoading();
     }
 }
 window.addVideo = addVideo;
 
+async function removeVideo(topicId, index) {
+    if (!confirm("Videoni o'chirmoqchimisiz?")) return;
+    const topic = state.topics.find(t => t.id === topicId);
+    if (!topic?.videos) return;
+    topic.videos.splice(index, 1);
+    showLoading();
+    await saveData();
+    hideLoading();
+    renderVideos();
+}
+window.removeVideo = removeVideo;
+
 function rewardVideo(xp) {
     addXP(parseInt(xp));
     alert(`${xp} XP sovg'a qilindi!`);
 }
 
-function renderLeaderboard() {
-    const container = document.getElementById('view-container');
-    container.innerHTML = `
-        <div class="fade-in card">
-            <h2>🏆 Top O'quvchilar</h2>
-            <p style="color:var(--text-muted); margin-bottom:1.5rem;">Hozircha o'quvchilar ro'yxati bo'sh. O'quvchilar paneli ishga tushgandan so'ng natijalar bu yerda ko'rinadi.</p>
-            <table class="leaderboard-table">
-                <thead>
-                    <tr><th>O'rin</th><th>Ism</th><th>XP</th></tr>
-                </thead>
-                <tbody>
-                    <tr><td colspan="3" style="text-align:center; padding: 2rem; color:var(--text-muted)">Ma'lumotlar yo'q</td></tr>
-                </tbody>
-            </table>
-        </div>
-    `;
-}
-
-function renderProfile() {
-    const container = document.getElementById('view-container');
-    container.innerHTML = `
-        <div class="fade-in profile-view">
-            <div class="card profile-header-card">
-                <div class="large-avatar">👤</div>
-                <h2>${state.user.name}</h2>
-                <p>Admin | ${state.level}-daraja</p>
-            </div>
-            <div class="grid" style="margin-top: 2rem;">
-                <div class="card">
-                    <h3>🎖 Yutuqlar</h3>
-                    <div class="badges-container">
-                        ${state.xp > 0 ? '<span class="badge" title="Birinchi qadam">🎯</span>' : ''}
-                        ${state.level > 1 ? '<span class="badge" title="Bilimdon">🌟</span>' : ''}
-                        ${Object.keys(state.progress).length > 2 ? '<span class="badge" title="Matematik">🎓</span>' : ''}
-                    </div>
-                </div>
-                <div class="card">
-                    <h3>📈 Statistika</h3>
-                    <p>To'plangan XP: <strong>${state.xp}</strong></p>
-                    <p>Faollik: <strong>${state.streak} kun</strong></p>
-                </div>
-            </div>
-        </div>
-    `;
-}
-
-// Global Exports moved to initAdminPanel
+// ─── Quiz (Mustahkamlash) ──────────────────────────────────────────────────
 
 function renderMustahkamlash() {
     const container = document.getElementById('view-container');
     container.innerHTML = `
         <div class="fade-in">
-            <h1 class="view-title">Admin: Mavzularni mustahkamlash 🧱</h1>
+            <h1 class="view-title">Mavzularni mustahkamlash 🧱</h1>
 
-            <!-- Admin: Add Quiz Question Form -->
-            <div class="card admin-quiz-form" style="margin-bottom: 2rem;">
-                <h3 style="display:flex; align-items:center; gap:0.5rem;"><span class="icon">📝</span> Yangi test savoli qo'shish</h3>
+            <div class="card admin-quiz-form" style="margin-bottom:2rem;">
+                <h3><span class="icon">📝</span> Yangi test savoli qo'shish</h3>
                 <div class="form-grid" style="margin-top:1.5rem;">
                     <div class="form-group">
-                        <label>Mavzuni tanlang</label>
+                        <label>Mavzu</label>
                         <select id="quiz-topic-id" class="form-input">
                             ${state.topics.map(t => `<option value="${t.id}">${t.title}</option>`).join('')}
                         </select>
@@ -756,20 +659,19 @@ function renderMustahkamlash() {
                 </div>
                 <div class="form-group" style="margin-top:1rem;">
                     <label>Savol matni</label>
-                    <input type="text" id="quiz-question" class="form-input" placeholder="Masalan: 5 * 5 nechaga teng?">
+                    <input type="text" id="quiz-question" class="form-input" placeholder="Masalan: 5 × 5 nechaga teng?">
                 </div>
-                
                 <div id="mcq-options-area" style="margin-top:1rem;">
                     <label>Variantlar (vergul bilan ajrating)</label>
                     <input type="text" id="quiz-options" class="form-input" placeholder="20, 25, 30, 35">
-                    <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0.5rem;">To'g'ri javob tartib raqami (0 dan boshlab): <input type="number" id="quiz-correct-index" style="width:50px;" value="1"></p>
+                    <p style="font-size:0.8rem; color:var(--text-muted); margin-top:0.5rem;">
+                        To'g'ri javob raqami (0 dan): <input type="number" id="quiz-correct-index" style="width:60px; padding:4px 8px;" value="0" min="0">
+                    </p>
                 </div>
-
                 <div id="fib-answer-area" style="margin-top:1rem; display:none;">
                     <label>To'g'ri javob</label>
                     <input type="text" id="quiz-fib-answer" class="form-input" placeholder="25">
                 </div>
-
                 <div class="admin-form-actions">
                     <button class="primary-btn" onclick="window.addQuestion()">Savolni saqlash</button>
                 </div>
@@ -778,9 +680,9 @@ function renderMustahkamlash() {
             <div class="grid">
                 ${state.topics.map(topic => `
                     <div class="card">
-                        <h3>${topic.title}</h3>
-                        <p style="margin-bottom:1rem; color:var(--text-muted)">Mavjud savollar: ${topic.quizzes ? topic.quizzes.length : 0} ta</p>
-                        <button class="primary-btn btn-sm" onclick="window.startQuiz('${topic.id.replace(/'/g, "\\'")}')">Mashqlarni ko'rish</button>
+                        <h3>${topic.icon} ${topic.title}</h3>
+                        <p style="color:var(--text-muted); margin-bottom:1rem;">${topic.quizzes?.length || 0} ta savol</p>
+                        ${topic.quizzes?.length > 0 ? `<button class="primary-btn btn-sm" onclick="window.startQuiz('${_esc(topic.id)}')">Ko'rish / Sinash</button>` : ''}
                     </div>
                 `).join('')}
             </div>
@@ -790,152 +692,249 @@ function renderMustahkamlash() {
 
 function toggleQuizOptions(type) {
     document.getElementById('mcq-options-area').style.display = type === 'mcq' ? 'block' : 'none';
-    document.getElementById('fib-answer-area').style.display = type === 'fib' ? 'block' : 'none';
+    document.getElementById('fib-answer-area').style.display  = type === 'fib'  ? 'block' : 'none';
 }
 window.toggleQuizOptions = toggleQuizOptions;
 
 async function addQuestion() {
     const topicId = document.getElementById('quiz-topic-id').value;
-    const type = document.getElementById('quiz-type').value;
-    const questionText = document.getElementById('quiz-question').value;
+    const type    = document.getElementById('quiz-type').value;
+    const qText   = document.getElementById('quiz-question').value.trim();
 
-    if (!topicId || !questionText) return alert("Barcha maydonlarni to'ldiring!");
+    if (!topicId || !qText) return alert("Barcha maydonlarni to'ldiring!");
 
     showLoading();
     const topic = state.topics.find(t => t.id === topicId);
-    if (!topic) return;
+    if (!topic) { hideLoading(); return; }
     if (!topic.quizzes) topic.quizzes = [];
 
     if (type === 'mcq') {
-        const optionsText = document.getElementById('quiz-options').value;
+        const optionsText  = document.getElementById('quiz-options').value;
         const correctIndex = parseInt(document.getElementById('quiz-correct-index').value);
-        if (!optionsText) return alert("Variantlarni kiriting!");
-        
+        if (!optionsText) { hideLoading(); return alert("Variantlarni kiriting!"); }
         topic.quizzes.push({
-            type: 'mcq',
-            q: questionText,
+            type: 'mcq', q: qText,
             options: optionsText.split(',').map(s => s.trim()),
-            correct: correctIndex,
-            difficulty: 'medium'
+            correct: correctIndex, difficulty: 'medium'
         });
     } else {
-        const correct = document.getElementById('quiz-fib-answer').value;
-        if (!correct) return alert("To'g'ri javobni kiriting!");
-        
-        topic.quizzes.push({
-            type: 'fib',
-            q: questionText,
-            correct: correct,
-            difficulty: 'medium'
-        });
+        const correct = document.getElementById('quiz-fib-answer').value.trim();
+        if (!correct) { hideLoading(); return alert("To'g'ri javobni kiriting!"); }
+        topic.quizzes.push({ type: 'fib', q: qText, correct, difficulty: 'medium' });
     }
 
     try {
-        await saveLocalData();
+        await saveData();
+        // Clear fields
+        document.getElementById('quiz-question').value = '';
+        document.getElementById('quiz-options').value  = '';
+        document.getElementById('quiz-fib-answer').value = '';
         hideLoading();
         renderMustahkamlash();
-        alert("Savol muvaffaqiyatli qo'shildi! 📝✅");
+        alert("Savol qo'shildi! 📝✅");
     } catch (e) {
         hideLoading();
     }
 }
 window.addQuestion = addQuestion;
 
-function openEditTopic(topicId) {
+// ─── Quiz preview (admin can test their own questions) ────────────────────
+
+function renderQuiz(topicId) {
     const topic = state.topics.find(t => t.id === topicId);
     if (!topic) return;
+    if (!topic.quizzes || topic.quizzes.length === 0) {
+        return alert("Bu mavzuda hali savollar yo'q.");
+    }
 
+    currentQuizState = { topic, currentQuestionIndex: 0, score: 0, answers: [] };
+    const container  = document.getElementById('view-container');
+    container.innerHTML = `
+        <div class="theory-view fade-in card">
+            <h2 class="view-title">${topic.title}: Nazariya 📖</h2>
+            <div class="theory-content" style="font-size:1.1rem; margin:2rem 0; line-height:1.8;">
+                ${topic.theory ? `<p>${topic.theory}</p>` : '<p style="color:var(--text-muted)">Nazariya qo\'shilmagan.</p>'}
+            </div>
+            <div class="theory-actions">
+                <button class="primary-btn" onclick="window.renderCurrentQuestion()">Sinab ko'rish 🚀</button>
+                <button class="primary-btn" style="background:var(--border); color:var(--text-main)" onclick="appNavigate('mustahkamlash')">Orqaga</button>
+            </div>
+        </div>
+    `;
+}
+
+function renderCurrentQuestion() {
+    const { topic, currentQuestionIndex } = currentQuizState;
+    const question  = topic.quizzes[currentQuestionIndex];
     const container = document.getElementById('view-container');
-    const materials = state.materials[topicId] || [];
 
     container.innerHTML = `
-        <div class="fade-in">
-            <h1 class="view-title">Mavzuni tahrirlash: ${topic.title} ✏️</h1>
-            
-            <div class="card admin-topic-form" style="position:relative; padding-bottom: 5rem;">
-                <h3 style="display:flex; align-items:center; gap:0.5rem;"><span class="icon">📝</span> Mavzu ma'lumotlarini o'zgartirish</h3>
-                
-                <div class="form-group" style="margin-top:1.5rem;">
-                    <label>Mavzu nomi</label>
-                    <input type="text" id="edit-topic-title" class="form-input" value="${topic.title}">
-                </div>
-
-                <div class="form-group" style="margin-top:1.5rem;">
-                    <label>📁 O'quv materiallari (PDF/Word/PPT qo'shish)</label>
-                    <input type="file" id="edit-topic-materials" class="form-input" accept=".pdf,.doc,.docx,.ppt,.pptx" multiple>
-                </div>
-
-                <div class="materials-preview" style="margin-top:2rem; padding:1.5rem; background:rgba(var(--primary-rgb), 0.05); border-radius:var(--radius-md);">
-                    <h4 style="margin-bottom:1rem; display:flex; align-items:center; gap:0.5rem;"><span class="icon">📁</span> Joriy materiallar:</h4>
-                    <div class="file-list">
-                        ${materials.length > 0 ? materials.map((f, i) => `
-                            <div class="file-item" style="background:white; border:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; padding:0.8rem; border-radius:8px; margin-bottom:0.5rem;">
-                                <div style="display:flex; align-items:center; gap:0.8rem;">
-                                    <span style="font-size:1.2rem;">${f.type === 'pdf' ? '📄' : f.type === 'doc' ? '📝' : '📊'}</span>
-                                    <span style="font-weight:500;">${f.name}</span>
-                                </div>
-                                <button class="btn-icon" onclick="window.removeMaterial('${topicId.replace(/'/g, "\\'")}', ${i})" style="color:var(--accent-red); padding:5px;">🗑️</button>
-                            </div>
-                        `).join('') : '<p style="font-size:0.9rem; color:var(--text-muted)">Hali hech qanday material qo\'shilmagan.</p>'}
-                    </div>
-                </div>
-
-                <div class="admin-form-actions" style="position:absolute; bottom:1.5rem; right:1.5rem; display:flex; gap:1rem;">
-                    <button class="primary-btn" style="background:var(--border); color:var(--text-main); padding: 0.6rem 1.5rem;" onclick="appNavigate('topics')">Bekor qilish</button>
-                    <button class="primary-btn" onclick="window.saveTopicEdit('${topicId}')" style="padding: 0.8rem 3rem; font-weight:700;">Saqlash</button>
+        <div class="quiz-view fade-in">
+            <div class="quiz-header">
+                <h2>${topic.title}</h2>
+                <span>Savol ${currentQuestionIndex + 1} / ${topic.quizzes.length}</span>
+            </div>
+            <div class="card quiz-card">
+                <p class="question-text">${question.q}</p>
+                <div class="quiz-options">
+                    ${question.type === 'mcq'
+                        ? question.options.map((opt, i) => `<button class="option-btn" onclick="window.submitAnswer(${i})">${opt}</button>`).join('')
+                        : `<input type="text" id="fib-answer" placeholder="Javobni yozing..." class="fib-input">
+                           <button class="primary-btn" onclick="window.submitAnswer(document.getElementById('fib-answer').value)">Yuborish</button>`
+                    }
                 </div>
             </div>
         </div>
     `;
 }
-window.openEditTopic = openEditTopic;
+window.renderCurrentQuestion = renderCurrentQuestion;
 
+function submitAnswer(answer) {
+    const { topic, currentQuestionIndex } = currentQuizState;
+    const question = topic.quizzes[currentQuestionIndex];
+    const isCorrect = question.type === 'mcq'
+        ? answer === question.correct
+        : String(answer).trim().toLowerCase() === String(question.correct).toLowerCase();
 
-async function saveTopicEdit(id) {
-    const topic = state.topics.find(t => t.id === id);
-    if (!topic) return;
+    if (isCorrect) currentQuizState.score++;
+    currentQuizState.currentQuestionIndex++;
 
-    const newTitle = document.getElementById('edit-topic-title').value;
-    const newFiles = document.getElementById('edit-topic-materials').files;
-
-    if (!newTitle) return alert("Mavzu nomini kiriting!");
-
-    showLoading();
-    topic.title = newTitle;
-
-    // Handle new file additions
-    if (!state.materials[id]) state.materials[id] = [];
-    for (let file of newFiles) {
-        const type = file.name.endsWith('.pdf') ? 'pdf' : (file.name.endsWith('.ppt') || file.name.endsWith('.pptx')) ? 'ppt' : 'doc';
-        state.materials[id].push({
-            name: file.name,
-            type: type,
-            url: '#' 
-        });
+    if (currentQuizState.currentQuestionIndex < topic.quizzes.length) {
+        renderCurrentQuestion();
+    } else {
+        finishQuiz();
     }
+}
+
+async function finishQuiz() {
+    const { topic, score }  = currentQuizState;
+    const finalPercent      = Math.round((score / topic.quizzes.length) * 100);
+    const container         = document.getElementById('view-container');
+
+    container.innerHTML = `
+        <div class="fade-in card text-center">
+            <h1>Natija: ${finalPercent}%</h1>
+            <p>${finalPercent >= 70 ? 'Savollar to\'g\'ri tuzilgan! 🎉' : 'Savollarni qayta ko\'rib chiqing. 💪'}</p>
+            <div class="result-stats">
+                <div class="stat"><span>To'g'ri:</span> <strong>${score} / ${topic.quizzes.length}</strong></div>
+            </div>
+            <button class="primary-btn" onclick="appNavigate('mustahkamlash')">Orqaga</button>
+        </div>
+    `;
+}
+
+// ─── Leaderboard ───────────────────────────────────────────────────────────
+
+async function renderLeaderboard() {
+    const container = document.getElementById('view-container');
+    container.innerHTML = `<div class="fade-in card"><h2>🏆 O'quvchilar reytingi</h2><p style="color:var(--text-muted)">Yuklanmoqda...</p></div>`;
 
     try {
-        await saveLocalData();
-        hideLoading();
-        renderTopics();
-        alert("Mavzu muvaffaqiyatli yangilandi! ✅");
-    } catch (e) {
-        hideLoading();
-    }
-}
-window.saveTopicEdit = saveTopicEdit;
+        const { data, error } = await supabaseClient
+            .from('student_progress')
+            .select('student_id, name, xp, level')
+            .order('xp', { ascending: false })
+            .limit(50);
 
-async function removeMaterial(topicId, index) {
-    if (confirm("Ushbu materialni ro'yxatdan o'chirmoqchimisiz?")) {
-        showLoading();
-        state.materials[topicId].splice(index, 1);
-        try {
-            await saveLocalData();
-            hideLoading();
-            openEditTopic(topicId); // Refresh edit view
-        } catch (e) {
-            hideLoading();
-        }
+        if (error) throw error;
+
+        const rows = (data || []).map((p, i) => `
+            <tr>
+                <td><strong>${i + 1}</strong></td>
+                <td>${p.name || 'O\'quvchi'}</td>
+                <td><strong>${p.xp}</strong> XP</td>
+                <td>${p.level}-daraja</td>
+            </tr>
+        `).join('');
+
+        container.innerHTML = `
+            <div class="fade-in card">
+                <h2>🏆 O'quvchilar reytingi</h2>
+                <p style="color:var(--text-muted); margin-bottom:1.5rem;">Jami ${data?.length || 0} ta o'quvchi ro'yxatdan o'tgan</p>
+                <table class="leaderboard-table">
+                    <thead><tr><th>O'rin</th><th>Ism</th><th>XP</th><th>Daraja</th></tr></thead>
+                    <tbody>${rows || '<tr><td colspan="4" style="text-align:center; padding:2rem; color:var(--text-muted)">Hali o\'quvchilar yo\'q</td></tr>'}</tbody>
+                </table>
+            </div>
+        `;
+    } catch (e) {
+        container.innerHTML = `<div class="fade-in card"><h2>🏆 O'quvchilar reytingi</h2><p style="color:var(--danger)">Xatolik: ${e.message}</p></div>`;
     }
 }
+
+// ─── Profile ───────────────────────────────────────────────────────────────
+
+function renderProfile() {
+    const container = document.getElementById('view-container');
+    container.innerHTML = `
+        <div class="fade-in profile-view">
+            <div class="card profile-header-card">
+                <div class="large-avatar">👤</div>
+                <h2>${state.user.name}</h2>
+                <p>O'qituvchi | ${authState.user?.email || ''}</p>
+            </div>
+            <div class="grid" style="margin-top:2rem;">
+                <div class="card">
+                    <h3>⚙️ Hisob</h3>
+                    <p>Email: <strong>${authState.user?.email || ''}</strong></p>
+                    <p>Role: <strong>Admin</strong></p>
+                    <button class="primary-btn btn-sm" style="margin-top:1rem; background:var(--danger);" onclick="window.logout()">Chiqish 🚪</button>
+                </div>
+                <div class="card">
+                    <h3>📊 Tizim statistikasi</h3>
+                    <p>Mavzular: <strong>${state.topics.length}</strong></p>
+                    <p>Umumiy savollar: <strong>${state.topics.reduce((a,t) => a + (t.quizzes?.length||0), 0)}</strong></p>
+                    <p>Videolar: <strong>${state.topics.reduce((a,t) => a + (t.videos?.length||0), 0)}</strong></p>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+// ─── restoreFromClipboard (legacy) ─────────────────────────────────────────
+
+async function restoreFromClipboard() {
+    const dataRaw = prompt("Avvaldan nusxalangan JSON ma'lumotni qo'ying:");
+    if (!dataRaw) return;
+    try {
+        const parsed = JSON.parse(dataRaw);
+        const topicsToMigrate = parsed.topics || (Array.isArray(parsed) ? parsed : null);
+        if (!topicsToMigrate?.length) return alert("Format noto'g'ri.");
+        state.topics         = topicsToMigrate;
+        state.materials      = parsed.materials || {};
+        state.unlockedTopics = parsed.unlockedTopics || state.topics.map(t => t.id);
+        await saveData();
+        alert("Ma'lumotlar saqlandi! ✅");
+        renderTopics();
+    } catch (e) {
+        alert("JSON o'qib bo'lmadi: " + e.message);
+    }
+}
+window.restoreFromClipboard = restoreFromClipboard;
+
+// ─── Utilities ─────────────────────────────────────────────────────────────
+
+function _fileType(name) {
+    if (name.endsWith('.pdf')) return 'pdf';
+    if (name.endsWith('.ppt') || name.endsWith('.pptx')) return 'ppt';
+    return 'doc';
+}
+
+function _embedUrl(url) {
+    if (!url) return '';
+    if (url.includes('/embed/')) return url;
+    if (url.includes('watch?v=')) return url.replace('watch?v=', 'embed/').split('&')[0];
+    if (url.includes('youtu.be/')) return 'https://www.youtube.com/embed/' + url.split('youtu.be/')[1].split('?')[0];
+    return url;
+}
+
+// Escape for use inside onclick="..." attributes
+function _esc(str) { return String(str).replace(/'/g, "\\'"); }
+
+// Escape for HTML attribute values (value="...")
+function _escAttr(str) { return String(str).replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+
+// Escape for innerHTML text content
+function _escHtml(str) { return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
 })(); // End of Admin Namespace
