@@ -1,17 +1,19 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
 import { AppUser, Topic, Materials, StudentProgress, Exam } from '@/lib/types';
 import { videoKey } from '@/lib/utils';
-import StudentLayout    from '@/components/student/StudentLayout';
-import StudentDashboard from '@/components/student/StudentDashboard';
-import StudentTopics    from '@/components/student/StudentTopics';
-import StudentVideos    from '@/components/student/StudentVideos';
+import {
+  getSession, getTopics, getMaterials, getStudentProgress, saveStudentProgress, getExams,
+} from '@/lib/api';
+import StudentLayout      from '@/components/student/StudentLayout';
+import StudentDashboard   from '@/components/student/StudentDashboard';
+import StudentTopics      from '@/components/student/StudentTopics';
+import StudentVideos      from '@/components/student/StudentVideos';
 import StudentLeaderboard from '@/components/student/StudentLeaderboard';
-import StudentProfile    from '@/components/student/StudentProfile';
-import ExamList          from '@/components/student/ExamList';
-import ExamSession       from '@/components/student/ExamSession';
+import StudentProfile     from '@/components/student/StudentProfile';
+import ExamList           from '@/components/student/ExamList';
+import ExamSession        from '@/components/student/ExamSession';
 
 export type StudentPage = 'dashboard' | 'topics' | 'videos' | 'imtihonlar' | 'leaderboard' | 'profile';
 
@@ -24,14 +26,14 @@ const DEFAULT_PROGRESS: StudentProgress = {
 
 export default function StudentPage() {
   const router = useRouter();
-  const [user,         setUser]         = useState<AppUser | null>(null);
-  const [topics,       setTopics]       = useState<Topic[]>([]);
-  const [materials,    setMaterials]    = useState<Materials>({});
-  const [exams,        setExams]        = useState<Exam[]>([]);
-  const [prog,         setProg]         = useState<StudentProgress>(DEFAULT_PROGRESS);
-  const [page,         setPage]         = useState<StudentPage>('dashboard');
-  const [activeExam,   setActiveExam]   = useState<Exam | null>(null);
-  const [saving,       setSaving]       = useState(false);
+  const [user,       setUser]       = useState<AppUser | null>(null);
+  const [topics,     setTopics]     = useState<Topic[]>([]);
+  const [materials,  setMaterials]  = useState<Materials>({});
+  const [exams,      setExams]      = useState<Exam[]>([]);
+  const [prog,       setProg]       = useState<StudentProgress>(DEFAULT_PROGRESS);
+  const [page,       setPage]       = useState<StudentPage>('dashboard');
+  const [activeExam, setActiveExam] = useState<Exam | null>(null);
+  const [saving,     setSaving]     = useState(false);
 
   // ── Save ──────────────────────────────────────────────────────
   const saveProgress = useCallback(async (uid: string, name: string, next: StudentProgress) => {
@@ -39,19 +41,17 @@ export default function StudentPage() {
     const updated = { ...next, level: Math.floor(next.xp / 100) + 1, name };
     try {
       localStorage.setItem(`mq_student_v2_${uid}`, JSON.stringify(updated));
-      await supabase.from('student_progress').upsert({
-        student_id:        uid,
+      await saveStudentProgress({
         name,
-        xp:                updated.xp,
-        level:             updated.level,
-        streak:            updated.streak,
-        progress:          updated.progress,
-        topic_xp:          updated.topicXP,
-        watched_videos:    updated.watchedVideos,
-        unlocked_topics:   updated.unlockedTopics,
-        exam_best_scores:  updated.examBestScores,
-        unlocked_exams:    updated.unlockedExams,
-        updated_at:        new Date().toISOString(),
+        xp:              updated.xp,
+        level:           updated.level,
+        streak:          updated.streak,
+        progress:        updated.progress,
+        topic_xp:        updated.topicXP,
+        watched_videos:  updated.watchedVideos,
+        unlocked_topics: updated.unlockedTopics,
+        exam_best_scores: updated.examBestScores,
+        unlocked_exams:  updated.unlockedExams,
       });
       setProg(updated);
     } finally {
@@ -61,59 +61,20 @@ export default function StudentPage() {
 
   // ── Load ──────────────────────────────────────────────────────
   const loadData = useCallback(async (uid: string) => {
-    // Exams
-    const { data: examData } = await supabase
-      .from('exams').select('*').order('sort_order', { ascending: true });
-    if (examData) setExams(examData.map((r: Record<string, unknown>) => ({
-      id:               r.id               as string,
-      title:            r.title            as string,
-      description:      (r.description     as string) || '',
-      topicId:          (r.topic_id        as string) || 'all',
-      questionCount:    (r.question_count  as number) || 10,
-      timeLimitMinutes: (r.time_limit_minutes as number) || 20,
-      passingScore:     (r.passing_score   as number) || 70,
-      sort_order:       (r.sort_order      as number) || 0,
-      created_at:       r.created_at       as string,
-    })));
+    const [examData, ts, mats, sp] = await Promise.all([
+      getExams(),
+      getTopics(),
+      getMaterials(),
+      getStudentProgress(),
+    ]);
 
-    // Topics
-    const { data: topicData } = await supabase
-      .from('topics').select('*').order('sort_order', { ascending: true });
-    if (topicData?.length) {
-      const ts: Topic[] = topicData.map(r => ({
-        id: r.id, title: r.title, icon: r.icon || '📚',
-        theory: r.theory || '', quizzes: r.quizzes || [], videos: r.videos || [],
-      }));
-      const mats: Materials = {};
-      topicData.forEach(r => { mats[r.id] = r.materials || []; });
-      setTopics(ts);
-      setMaterials(mats);
-      localStorage.setItem('mq_admin_v2', JSON.stringify({ topics: ts, materials: mats }));
-    } else {
-      const cached = localStorage.getItem('mq_admin_v2');
-      if (cached) {
-        const d = JSON.parse(cached);
-        setTopics(d.topics || []);
-        setMaterials(d.materials || {});
-      }
-    }
+    setExams(examData as Exam[]);
+    setTopics(ts as Topic[]);
+    setMaterials(mats as Materials);
+    localStorage.setItem('mq_admin_v2', JSON.stringify({ topics: ts, materials: mats }));
 
-    // Progress
-    const { data: sp } = await supabase
-      .from('student_progress').select('*').eq('student_id', uid).single();
     if (sp) {
-      setProg({
-        xp:              sp.xp              || 0,
-        level:           sp.level           || 1,
-        streak:          sp.streak          || 0,
-        progress:        sp.progress        || {},
-        topicXP:         sp.topic_xp        || {},
-        watchedVideos:   sp.watched_videos  || {},
-        unlockedTopics:  sp.unlocked_topics || [],
-        examBestScores:  sp.exam_best_scores || {},
-        unlockedExams:   sp.unlocked_exams  || [],
-        name:            sp.name            || '',
-      });
+      setProg(sp as StudentProgress);
     } else {
       const cached = localStorage.getItem(`mq_student_v2_${uid}`);
       if (cached) { setProg(JSON.parse(cached)); }
@@ -122,17 +83,10 @@ export default function StudentPage() {
 
   // ── Auth ──────────────────────────────────────────────────────
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    getSession().then(async session => {
       if (!session) { router.replace('/'); return; }
-      const { data: profile } = await supabase
-        .from('profiles').select('*').eq('id', session.user.id).single();
-      if (profile?.role === 'admin') { router.replace('/admin'); return; }
-      const u: AppUser = {
-        uid:   session.user.id,
-        email: session.user.email!,
-        role:  'student',
-        name:  profile?.name || session.user.email!.split('@')[0],
-      };
+      if (session.role === 'admin') { router.replace('/admin'); return; }
+      const u: AppUser = { uid: session.uid, email: session.email, role: 'student', name: session.name };
       setUser(u);
       await loadData(u.uid);
     });
@@ -160,9 +114,9 @@ export default function StudentPage() {
 
   // ── Quiz complete ─────────────────────────────────────────────
   async function handleQuizComplete(topicId: string, score: number, total: number): Promise<number> {
-    const pct     = Math.round((score / total) * 100);
-    const earned  = score * 10;
-    const prevXP  = prog.topicXP[topicId] || 0;
+    const pct    = Math.round((score / total) * 100);
+    const earned = score * 10;
+    const prevXP = prog.topicXP[topicId] || 0;
     const xpToAdd = Math.max(0, earned - prevXP);
 
     const newProgress = { ...prog.progress };
@@ -179,13 +133,7 @@ export default function StudentPage() {
       }
     }
 
-    const next: StudentProgress = {
-      ...prog,
-      xp:            prog.xp + xpToAdd,
-      progress:      newProgress,
-      topicXP:       newTopicXP,
-      unlockedTopics: newUnlocked,
-    };
+    const next: StudentProgress = { ...prog, xp: prog.xp + xpToAdd, progress: newProgress, topicXP: newTopicXP, unlockedTopics: newUnlocked };
     await saveProgress(user!.uid, user!.name, next);
     return xpToAdd;
   }
@@ -194,26 +142,20 @@ export default function StudentPage() {
   async function handleWatchVideo(topicId: string, videoIndex: number): Promise<number> {
     const key = videoKey(topicId, videoIndex);
     if (prog.watchedVideos[key]) return 0;
-
     const topic = topics.find(t => t.id === topicId);
     const xp    = topic?.videos?.[videoIndex]?.xp || 20;
-
-    const next: StudentProgress = {
-      ...prog,
-      xp:           prog.xp + xp,
-      watchedVideos: { ...prog.watchedVideos, [key]: true },
-    };
+    const next: StudentProgress = { ...prog, xp: prog.xp + xp, watchedVideos: { ...prog.watchedVideos, [key]: true } };
     await saveProgress(user!.uid, user!.name, next);
     return xp;
   }
 
   // ── Exam complete ─────────────────────────────────────────────
   async function handleExamComplete(exam: Exam, score: number, total: number, timeTaken: number): Promise<number> {
-    const pct        = Math.round((score / total) * 100);
-    const passed     = pct >= exam.passingScore;
-    const xpEarned   = score * 15;
-    const prevBest   = prog.examBestScores[exam.id] || 0;
-    const xpToAdd    = Math.max(0, xpEarned - prevBest);
+    const pct      = Math.round((score / total) * 100);
+    const passed   = pct >= exam.passingScore;
+    const xpEarned = score * 15;
+    const prevBest = prog.examBestScores[exam.id] || 0;
+    const xpToAdd  = Math.max(0, xpEarned - prevBest);
 
     const newBestScores = { ...prog.examBestScores };
     if (pct > (newBestScores[exam.id] || 0)) newBestScores[exam.id] = pct;
@@ -226,17 +168,12 @@ export default function StudentPage() {
       }
     }
 
-    const next: StudentProgress = {
-      ...prog,
-      xp:             prog.xp + xpToAdd,
-      examBestScores: newBestScores,
-      unlockedExams:  newUnlockedExams,
-    };
+    const next: StudentProgress = { ...prog, xp: prog.xp + xpToAdd, examBestScores: newBestScores, unlockedExams: newUnlockedExams };
     await saveProgress(user!.uid, user!.name, next);
     return xpToAdd;
   }
 
-  // ── Render page ───────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────
   function renderPage() {
     switch (page) {
       case 'dashboard':
@@ -271,8 +208,7 @@ export default function StudentPage() {
         if (activeExam) {
           return (
             <ExamSession
-              exam={activeExam}
-              topics={topics}
+              exam={activeExam} topics={topics}
               onComplete={handleExamComplete}
               onBack={() => setActiveExam(null)}
             />
@@ -280,8 +216,7 @@ export default function StudentPage() {
         }
         return (
           <ExamList
-            exams={exams}
-            examBestScores={prog.examBestScores}
+            exams={exams} examBestScores={prog.examBestScores}
             unlockedExams={prog.unlockedExams}
             onStart={exam => setActiveExam(exam)}
           />

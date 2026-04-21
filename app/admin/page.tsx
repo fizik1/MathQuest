@@ -1,9 +1,12 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
 import { AppUser, Topic, Materials, Material, Quiz } from '@/lib/types';
 import { fileType } from '@/lib/utils';
+import {
+  getSession, getTopics, getMaterials, saveTopics, deleteTopic,
+  getExams,
+} from '@/lib/api';
 import AdminLayout      from '@/components/admin/AdminLayout';
 import AdminDashboard   from '@/components/admin/AdminDashboard';
 import Topics           from '@/components/admin/Topics';
@@ -41,41 +44,23 @@ export default function AdminPage() {
 
   // ── Load ──────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
-    const { data, error } = await supabase
-      .from('topics').select('*').order('sort_order', { ascending: true });
-    if (!error && data?.length) {
-      const ts: Topic[] = data.map(r => ({
-        id: r.id, title: r.title, icon: r.icon || '📚',
-        theory: r.theory || '', quizzes: r.quizzes || [], videos: r.videos || [],
-      }));
-      const mats: Materials = {};
-      data.forEach(r => { mats[r.id] = r.materials || []; });
-      setTopics(ts);
-      setMaterials(mats);
-      localStorage.setItem('mq_admin_v2', JSON.stringify({ topics: ts, materials: mats }));
-      return;
-    }
-    const cached = localStorage.getItem('mq_admin_v2');
-    if (cached) {
-      const p = JSON.parse(cached);
-      setTopics(p.topics || []);
-      setMaterials(p.materials || {});
-    }
+    const [ts, mats] = await Promise.all([getTopics(), getMaterials()]);
+    setTopics(ts as Topic[]);
+    setMaterials(mats as Materials);
+    localStorage.setItem('mq_admin_v2', JSON.stringify({ topics: ts, materials: mats }));
   }, []);
 
   // ── Save ──────────────────────────────────────────────────────
   async function saveData(newTopics: Topic[], newMaterials: Materials) {
     setSaving(true);
     try {
-      for (let i = 0; i < newTopics.length; i++) {
-        const t = newTopics[i];
-        await supabase.from('topics').upsert({
-          id: t.id, title: t.title, icon: t.icon, theory: t.theory,
-          quizzes: t.quizzes, videos: t.videos,
-          materials: newMaterials[t.id] || [],
-          sort_order: i, updated_at: new Date().toISOString(),
-        });
-      }
+      const rows = newTopics.map((t, i) => ({
+        id: t.id, title: t.title, icon: t.icon, theory: t.theory,
+        quizzes: t.quizzes, videos: t.videos,
+        materials: newMaterials[t.id] || [],
+        sort_order: i,
+      }));
+      await saveTopics(rows);
       localStorage.setItem('mq_admin_v2', JSON.stringify({ topics: newTopics, materials: newMaterials }));
     } finally {
       setSaving(false);
@@ -84,12 +69,10 @@ export default function AdminPage() {
 
   // ── Auth ──────────────────────────────────────────────────────
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    getSession().then(async session => {
       if (!session) { router.replace('/'); return; }
-      const { data: profile } = await supabase
-        .from('profiles').select('*').eq('id', session.user.id).single();
-      if (profile?.role !== 'admin') { router.replace('/'); return; }
-      setUser({ uid: session.user.id, email: session.user.email!, role: 'admin', name: profile.name || 'Admin' });
+      if (session.role !== 'admin') { router.replace('/'); return; }
+      setUser({ uid: session.uid, email: session.email, role: 'admin', name: session.name });
       await loadData();
     });
   }, [router, loadData]);
@@ -129,18 +112,18 @@ export default function AdminPage() {
         });
       }
     }
-    const newTopics   = topics.filter(t => t.id !== topicId);
+    const newTopics    = topics.filter(t => t.id !== topicId);
     const newMaterials = { ...materials };
     delete newMaterials[topicId];
     setTopics(newTopics);
     setMaterials(newMaterials);
     await saveData(newTopics, newMaterials);
-    await supabase.from('topics').delete().eq('id', topicId);
+    await deleteTopic(topicId);
   }
 
   async function handleSaveTopicEdit(id: string, patch: Partial<Topic>, files: FileList | null) {
-    const uploaded = files?.length ? await uploadFiles(files, id) : [];
-    const newTopics   = topics.map(t => t.id === id ? { ...t, ...patch } : t);
+    const uploaded  = files?.length ? await uploadFiles(files, id) : [];
+    const newTopics = topics.map(t => t.id === id ? { ...t, ...patch } : t);
     const newMaterials = { ...materials, [id]: [...(materials[id] || []), ...uploaded] };
     setTopics(newTopics);
     setMaterials(newMaterials);
@@ -178,6 +161,17 @@ export default function AdminPage() {
     const newTopics = topics.map(t =>
       t.id === topicId ? { ...t, videos: (t.videos || []).filter((_, i) => i !== index) } : t
     );
+    setTopics(newTopics);
+    await saveData(newTopics, materials);
+  }
+
+  async function handleEditVideo(topicId: string, index: number, title: string, url: string, xp: number) {
+    const newTopics = topics.map(t => {
+      if (t.id !== topicId) return t;
+      const videos = [...(t.videos || [])];
+      videos[index] = { title, url, xp };
+      return { ...t, videos };
+    });
     setTopics(newTopics);
     await saveData(newTopics, materials);
   }
@@ -224,7 +218,7 @@ export default function AdminPage() {
       case 'videos':
         return (
           <Videos topics={topics} saving={saving}
-            onAddVideo={handleAddVideo} onRemoveVideo={handleRemoveVideo} />
+            onAddVideo={handleAddVideo} onRemoveVideo={handleRemoveVideo} onEditVideo={handleEditVideo} />
         );
       case 'imtihonlar':
         return <ExamManager topics={topics} />;

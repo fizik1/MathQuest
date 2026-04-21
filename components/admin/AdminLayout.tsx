@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { logout } from '@/lib/api';
 import { AppUser } from '@/lib/types';
 import { ToastProvider } from '@/components/ui/Toast';
 
@@ -37,8 +37,8 @@ export default function AdminLayout({ user, currentPage, saving, onNavigate, chi
     localStorage.setItem('mq_theme', next ? 'dark' : '');
   }
 
-  async function logout() {
-    await supabase.auth.signOut();
+  async function handleLogout() {
+    await logout();
     window.location.href = '/';
   }
 
@@ -50,14 +50,11 @@ export default function AdminLayout({ user, currentPage, saving, onNavigate, chi
   return (
     <ToastProvider>
       <div className="app-shell">
-
-        {/* Saving indicator */}
         <div className={`save-indicator ${saving ? '' : 'hidden'}`}>
           <div className="spinner" />
           <span>Saqlanmoqda...</span>
         </div>
 
-        {/* Sidebar */}
         <aside className={`sidebar ${sidebarOpen ? 'active' : ''}`}>
           <div className="logo">
             <span className="logo-icon">🔢</span>
@@ -85,13 +82,9 @@ export default function AdminLayout({ user, currentPage, saving, onNavigate, chi
           </ul>
 
           <div className="nav-divider" />
-
-          <div className="theme-toggle" onClick={toggleTheme}>
-            {dark ? '☀️' : '🌙'}
-          </div>
+          <div className="theme-toggle" onClick={toggleTheme}>{dark ? '☀️' : '🌙'}</div>
         </aside>
 
-        {/* Main */}
         <main className="content">
           <div className="top-bar">
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -103,7 +96,7 @@ export default function AdminLayout({ user, currentPage, saving, onNavigate, chi
             <div className="user-profile-summary">
               <span>{user.name}</span>
               <div className="header-avatar">👨‍🏫</div>
-              <button className="btn-icon" onClick={logout} title="Chiqish" style={{ fontSize: '1rem' }}>🚪</button>
+              <button className="btn-icon" onClick={handleLogout} title="Chiqish" style={{ fontSize: '1rem' }}>🚪</button>
             </div>
           </div>
 

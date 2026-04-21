@@ -1,12 +1,10 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
-import { supabase } from '@/lib/supabase';
 import { Topic, Exam } from '@/lib/types';
+import { getExams, addExam, deleteExam } from '@/lib/api';
 import { useToast } from '@/components/ui/Toast';
 
-interface Props {
-  topics: Topic[];
-}
+interface Props { topics: Topic[]; }
 
 export default function ExamManager({ topics }: Props) {
   const { toast } = useToast();
@@ -15,7 +13,6 @@ export default function ExamManager({ topics }: Props) {
   const [saving,  setSaving]  = useState(false);
   const [confirm, setConfirm] = useState<string | null>(null);
 
-  // Form state
   const [title,       setTitle]       = useState('');
   const [description, setDescription] = useState('');
   const [topicId,     setTopicId]     = useState<string>('all');
@@ -23,92 +20,62 @@ export default function ExamManager({ topics }: Props) {
   const [timeLimit,   setTimeLimit]   = useState(20);
   const [passing,     setPassing]     = useState(70);
 
-  // ── Load ──────────────────────────────────────────────────────
   const loadExams = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase.from('exams').select('*').order('sort_order', { ascending: true });
-    setExams((data || []).map((r: Record<string, unknown>) => ({
-      id:                r.id               as string,
-      title:             r.title            as string,
-      description:       (r.description     as string) || '',
-      topicId:           (r.topic_id        as string) || 'all',
-      questionCount:     (r.question_count  as number) || 10,
-      timeLimitMinutes:  (r.time_limit_minutes as number) || 20,
-      passingScore:      (r.passing_score   as number) || 70,
-      sort_order:        (r.sort_order      as number) || 0,
-      created_at:        r.created_at       as string,
-    })));
+    setExams(await getExams());
     setLoading(false);
   }, []);
 
   useEffect(() => { loadExams(); }, [loadExams]);
 
-  // ── Max questions for selected topic ──────────────────────────
   const maxQ = topicId === 'all'
     ? topics.reduce((s, t) => s + (t.quizzes?.length || 0), 0)
     : (topics.find(t => t.id === topicId)?.quizzes?.length || 0);
 
-  // ── Add exam ──────────────────────────────────────────────────
   async function handleAdd() {
     if (!title.trim()) { toast('Imtihon nomini kiriting!', 'warning'); return; }
-    if (qCount < 1) { toast('Savollar soni kamida 1 bo\'lishi kerak!', 'warning'); return; }
-    if (maxQ < qCount) {
-      toast(`Bu mavzuda faqat ${maxQ} ta savol mavjud!`, 'warning'); return;
-    }
+    if (qCount < 1)    { toast('Savollar soni kamida 1!', 'warning'); return; }
+    if (maxQ < qCount) { toast(`Bu mavzuda faqat ${maxQ} ta savol mavjud!`, 'warning'); return; }
     if (timeLimit < 1) { toast('Vaqt limiti kamida 1 daqiqa!', 'warning'); return; }
-    if (passing < 1 || passing > 100) { toast('O\'tish bali 1–100 orasida bo\'lishi kerak!', 'warning'); return; }
+    if (passing < 1 || passing > 100) { toast("O'tish bali 1–100 orasida!", 'warning'); return; }
 
     setSaving(true);
-    const id = `exam_${Date.now().toString(36)}`;
     const exam: Exam = {
-      id, title: title.trim(), description: description.trim(),
-      topicId, questionCount: qCount,
-      timeLimitMinutes: timeLimit,
-      passingScore: passing,
-      sort_order: exams.length,
+      id: `exam_${Date.now().toString(36)}`,
+      title: title.trim(), description: description.trim(),
+      topicId, questionCount: qCount, timeLimitMinutes: timeLimit,
+      passingScore: passing, sort_order: exams.length,
       created_at: new Date().toISOString(),
-    };
-
-    const { error } = await supabase.from('exams').insert({
-      id:                  exam.id,
-      title:               exam.title,
-      description:         exam.description,
-      topic_id:            exam.topicId,
-      question_count:      exam.questionCount,
-      time_limit_minutes:  exam.timeLimitMinutes,
-      passing_score:       exam.passingScore,
-      sort_order:          exam.sort_order,
-      created_at:          exam.created_at,
-    });
-    if (error) { toast('Xatolik yuz berdi: ' + error.message, 'error'); }
-    else {
+    } as Required<Exam>;
+    try {
+      await addExam(exam as Required<Exam>);
       setExams(prev => [...prev, exam]);
       setTitle(''); setDescription(''); setTopicId('all'); setQCount(10); setTimeLimit(20); setPassing(70);
-      toast('Imtihon qo\'shildi! 📝');
+      toast("Imtihon qo'shildi! 📝");
+    } catch (e) {
+      toast('Xatolik: ' + (e instanceof Error ? e.message : ''), 'error');
     }
     setSaving(false);
   }
 
-  // ── Remove exam ───────────────────────────────────────────────
   async function handleRemove(id: string) {
     setSaving(true);
-    const { error } = await supabase.from('exams').delete().eq('id', id);
-    if (error) { toast('Xatolik: ' + error.message, 'error'); }
-    else {
+    try {
+      await deleteExam(id);
       setExams(prev => prev.filter(e => e.id !== id));
-      toast('Imtihon o\'chirildi', 'info');
+      toast("Imtihon o'chirildi", 'info');
+    } catch (e) {
+      toast('Xatolik: ' + (e instanceof Error ? e.message : ''), 'error');
     }
     setConfirm(null);
     setSaving(false);
   }
 
-  // ── Render ────────────────────────────────────────────────────
   return (
     <div>
       <h1 className="view-title">Imtihonlar 📝</h1>
       <p className="view-subtitle">Imtihon yarating: vaqt limiti, savollar soni va o&apos;tish balini belgilang.</p>
 
-      {/* Add form */}
       <div className="card admin-form-card" style={{ marginBottom: '1.5rem' }}>
         <h3 style={{ marginBottom: '1.25rem' }}>➕ Yangi imtihon qo&apos;shish</h3>
 
@@ -133,8 +100,7 @@ export default function ExamManager({ topics }: Props) {
 
         <div className="form-group">
           <label>Tavsif (ixtiyoriy)</label>
-          <input type="text" className="form-input"
-            placeholder="Imtihon haqida qisqacha..."
+          <input type="text" className="form-input" placeholder="Imtihon haqida qisqacha..."
             value={description} onChange={e => setDescription(e.target.value)} />
         </div>
 
@@ -158,20 +124,17 @@ export default function ExamManager({ topics }: Props) {
             <label>O&apos;tish bali (%)</label>
             <input type="number" className="form-input" min={1} max={100}
               value={passing} onChange={e => setPassing(Number(e.target.value))} />
-            <p className="text-muted" style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>
-              Tavsiya: 70%
-            </p>
+            <p className="text-muted" style={{ fontSize: '0.75rem', marginTop: '0.25rem' }}>Tavsiya: 70%</p>
           </div>
         </div>
 
         <button className="primary-btn" onClick={handleAdd} disabled={saving || !title.trim()}>
           {saving
             ? <><div className="spinner" style={{ width: 14, height: 14 }} /> Saqlanmoqda...</>
-            : '✅ Imtihon qo\'shish'}
+            : "✅ Imtihon qo'shish"}
         </button>
       </div>
 
-      {/* Exam list */}
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
           <div className="spinner" />
@@ -192,7 +155,6 @@ export default function ExamManager({ topics }: Props) {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.4rem' }}>
                     <span style={{ fontWeight: 800, fontSize: '0.95rem' }}>{idx + 1}. {exam.title}</span>
-                    <span className="pill pill-primary" style={{ fontSize: '0.68rem' }}>#{idx + 1}</span>
                   </div>
                   {exam.description && (
                     <p className="text-muted" style={{ fontSize: '0.82rem', marginBottom: '0.4rem' }}>{exam.description}</p>

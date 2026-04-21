@@ -49,7 +49,13 @@ async function initAdminPanel() {
         window.removeMaterial      = removeMaterial;
         window.addQuestion         = addQuestion;
         window.toggleQuizOptions   = toggleQuizOptions;
-        window.renderCurrentQuestion = renderCurrentQuestion;  // FIX: expose to window
+        window.renderCurrentQuestion  = renderCurrentQuestion;
+        window.openEditQuestion       = openEditQuestion;
+        window.saveQuestionEdit       = saveQuestionEdit;
+        window.removeQuestion         = removeQuestion;
+        window.toggleEditQuizOptions  = toggleEditQuizOptions;
+        window.openEditVideo          = openEditVideo;
+        window.saveVideoEdit          = saveVideoEdit;
 
         renderAdminLayout();
         showLoading();
@@ -376,7 +382,8 @@ async function addTopic() {
     state.materials[id] = [];
     for (const file of files) {
         const type = _fileType(file.name);
-        state.materials[id].push({ name: file.name, type, url: '#' });
+        const { url, storagePath } = await uploadMaterial(file, id);
+        state.materials[id].push({ name: file.name, type, url, storagePath });
     }
 
     try {
@@ -489,7 +496,8 @@ async function saveTopicEdit(id) {
 
     if (!state.materials[id]) state.materials[id] = [];
     for (const file of newFiles) {
-        state.materials[id].push({ name: file.name, type: _fileType(file.name), url: '#' });
+        const { url, storagePath } = await uploadMaterial(file, id);
+        state.materials[id].push({ name: file.name, type: _fileType(file.name), url, storagePath });
     }
 
     try {
@@ -506,8 +514,10 @@ window.saveTopicEdit = saveTopicEdit;
 async function removeMaterial(topicId, index) {
     if (!confirm("Ushbu materialni o'chirmoqchimisiz?")) return;
     showLoading();
+    const material = (state.materials[topicId] || [])[index];
     state.materials[topicId].splice(index, 1);
     try {
+        await deleteMaterial(material?.storagePath);
         await saveData();
         hideLoading();
         openEditTopic(topicId);
@@ -526,7 +536,8 @@ async function triggerUpload(topicId, type) {
         if (!file) return;
         showLoading();
         if (!state.materials[topicId]) state.materials[topicId] = [];
-        state.materials[topicId].push({ name: file.name, type, url: '#' });
+        const { url, storagePath } = await uploadMaterial(file, topicId);
+        state.materials[topicId].push({ name: file.name, type, url, storagePath });
         await saveData();
         hideLoading();
         renderTopics();
@@ -577,7 +588,10 @@ function renderVideos() {
                                     <iframe width="100%" height="200" src="${_embedUrl(video.url)}" frameborder="0" allowfullscreen style="border-radius:var(--radius-md);"></iframe>
                                     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:8px;">
                                         <span style="font-weight:600; font-size:0.9rem;">${video.title}</span>
-                                        <button class="btn-icon" onclick="window.removeVideo('${_esc(topic.id)}',${vi})" style="color:var(--danger); font-size:1rem;">🗑️</button>
+                                        <div style="display:flex; gap:0.4rem;">
+                                            <button class="btn-icon" onclick="window.openEditVideo('${_esc(topic.id)}',${vi})" title="Tahrirlash" style="background:rgba(var(--primary-rgb),0.1); border-radius:6px; padding:0.4rem; font-size:1rem;">✏️</button>
+                                            <button class="btn-icon" onclick="window.removeVideo('${_esc(topic.id)}',${vi})" title="O'chirish" style="color:var(--danger); font-size:1rem; background:rgba(239,68,68,0.1); border-radius:6px; padding:0.4rem;">🗑️</button>
+                                        </div>
                                     </div>
                                 </div>
                             `).join('') : '<p style="color:var(--text-muted); font-size:0.9rem;">Videolar yo\'q.</p>'}
@@ -614,6 +628,58 @@ async function addVideo() {
     }
 }
 window.addVideo = addVideo;
+
+function openEditVideo(topicId, vi) {
+    const topic = state.topics.find(t => t.id === topicId);
+    if (!topic) return;
+    const video = topic.videos[vi];
+    if (!video) return;
+    const container = document.getElementById('view-container');
+
+    container.innerHTML = `
+        <div class="fade-in">
+            <h1 class="view-title">Videoni tahrirlash ✏️</h1>
+            <div class="card admin-video-form">
+                <div class="form-group" style="margin-bottom:1rem;">
+                    <label>Mavzu</label>
+                    <input type="text" class="form-input" value="${_escAttr(topic.title)}" disabled style="opacity:0.6;">
+                </div>
+                <div class="form-group" style="margin-bottom:1rem;">
+                    <label>Video nomi</label>
+                    <input type="text" id="ev-title" class="form-input" value="${_escAttr(video.title)}">
+                </div>
+                <div class="form-group" style="margin-bottom:1rem;">
+                    <label>YouTube URL</label>
+                    <input type="text" id="ev-url" class="form-input" value="${_escAttr(video.url)}">
+                </div>
+                <div style="margin-bottom:1.5rem;">
+                    <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:0.5rem;">Joriy preview:</p>
+                    <iframe width="100%" height="200" src="${_embedUrl(video.url)}" frameborder="0" allowfullscreen style="border-radius:var(--radius-md);"></iframe>
+                </div>
+                <div style="display:flex; gap:1rem; justify-content:flex-end;">
+                    <button class="primary-btn" style="background:var(--border); color:var(--text-main);" onclick="appNavigate('videos')">Bekor qilish</button>
+                    <button class="primary-btn" onclick="window.saveVideoEdit('${_esc(topicId)}',${vi})" style="padding:0.8rem 3rem; font-weight:700;">Saqlash ✅</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+window.openEditVideo = openEditVideo;
+
+async function saveVideoEdit(topicId, vi) {
+    const topic = state.topics.find(t => t.id === topicId);
+    if (!topic) return;
+    const newTitle = document.getElementById('ev-title').value.trim();
+    const newUrl   = document.getElementById('ev-url').value.trim();
+    if (!newTitle || !newUrl) return alert("Barcha maydonlarni to'ldiring!");
+    topic.videos[vi] = { ...topic.videos[vi], title: newTitle, url: _embedUrl(newUrl) };
+    showLoading();
+    await saveData();
+    hideLoading();
+    renderVideos();
+    alert("Video yangilandi! ✅");
+}
+window.saveVideoEdit = saveVideoEdit;
 
 async function removeVideo(topicId, index) {
     if (!confirm("Videoni o'chirmoqchimisiz?")) return;
@@ -677,12 +743,32 @@ function renderMustahkamlash() {
                 </div>
             </div>
 
-            <div class="grid">
+            <div style="display:flex; flex-direction:column; gap:1.5rem; margin-top:1rem;">
                 ${state.topics.map(topic => `
                     <div class="card">
-                        <h3>${topic.icon} ${topic.title}</h3>
-                        <p style="color:var(--text-muted); margin-bottom:1rem;">${topic.quizzes?.length || 0} ta savol</p>
-                        ${topic.quizzes?.length > 0 ? `<button class="primary-btn btn-sm" onclick="window.startQuiz('${_esc(topic.id)}')">Ko'rish / Sinash</button>` : ''}
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.8rem;">
+                            <h3 style="margin:0;">${topic.icon} ${topic.title}</h3>
+                            <span style="font-size:0.85rem; color:var(--text-muted);">${topic.quizzes?.length || 0} ta savol</span>
+                        </div>
+                        ${topic.quizzes?.length > 0 ? `
+                        <div style="display:flex; flex-direction:column; gap:0.5rem;">
+                            ${topic.quizzes.map((q, qi) => `
+                                <div style="background:rgba(var(--primary-rgb),0.05); border:1px solid var(--border); border-radius:8px; padding:0.75rem 1rem; display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
+                                    <div style="flex:1; min-width:0;">
+                                        <span style="font-size:0.75rem; background:var(--primary); color:#fff; padding:2px 6px; border-radius:10px; margin-right:6px;">${q.type === 'mcq' ? 'MCQ' : 'FIB'}</span>
+                                        <span style="font-size:0.9rem;">${_escHtml(q.q)}</span>
+                                    </div>
+                                    <div style="display:flex; gap:0.4rem; flex-shrink:0;">
+                                        <button class="btn-icon" onclick="window.openEditQuestion('${_esc(topic.id)}',${qi})" title="Tahrirlash" style="background:rgba(var(--primary-rgb),0.1); border-radius:6px; padding:0.4rem; font-size:1rem;">✏️</button>
+                                        <button class="btn-icon" onclick="window.removeQuestion('${_esc(topic.id)}',${qi})" title="O'chirish" style="background:rgba(239,68,68,0.1); color:var(--danger); border-radius:6px; padding:0.4rem; font-size:1rem;">🗑️</button>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                        <div style="margin-top:0.8rem;">
+                            <button class="primary-btn btn-sm" onclick="window.startQuiz('${_esc(topic.id)}')">Sinab ko'rish ▶️</button>
+                        </div>
+                        ` : '<p style="color:var(--text-muted); font-size:0.9rem;">Hali savollar qo\'shilmagan.</p>'}
                     </div>
                 `).join('')}
             </div>
@@ -737,6 +823,109 @@ async function addQuestion() {
     }
 }
 window.addQuestion = addQuestion;
+
+async function removeQuestion(topicId, qi) {
+    if (!confirm("Bu savolni o'chirmoqchimisiz?")) return;
+    const topic = state.topics.find(t => t.id === topicId);
+    if (!topic?.quizzes) return;
+    topic.quizzes.splice(qi, 1);
+    showLoading();
+    await saveData();
+    hideLoading();
+    renderMustahkamlash();
+}
+window.removeQuestion = removeQuestion;
+
+function openEditQuestion(topicId, qi) {
+    const topic = state.topics.find(t => t.id === topicId);
+    if (!topic) return;
+    const q = topic.quizzes[qi];
+    if (!q) return;
+    const container = document.getElementById('view-container');
+
+    const mcqOptions = q.type === 'mcq' ? (q.options || []).join(', ') : '';
+    const mcqCorrect = q.type === 'mcq' ? (q.correct ?? 0) : 0;
+    const fibAnswer  = q.type === 'fib'  ? (q.correct || '') : '';
+
+    container.innerHTML = `
+        <div class="fade-in">
+            <h1 class="view-title">Savolni tahrirlash ✏️</h1>
+            <div class="card admin-quiz-form">
+                <div class="form-grid" style="margin-bottom:1rem;">
+                    <div class="form-group">
+                        <label>Mavzu</label>
+                        <input type="text" class="form-input" value="${_escAttr(topic.title)}" disabled style="opacity:0.6;">
+                    </div>
+                    <div class="form-group">
+                        <label>Savol turi</label>
+                        <select id="eq-type" class="form-input" onchange="window.toggleEditQuizOptions(this.value)">
+                            <option value="mcq" ${q.type === 'mcq' ? 'selected' : ''}>Varianli (MCQ)</option>
+                            <option value="fib" ${q.type === 'fib' ? 'selected' : ''}>Yozma (FIB)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group" style="margin-bottom:1rem;">
+                    <label>Savol matni</label>
+                    <input type="text" id="eq-question" class="form-input" value="${_escAttr(q.q)}">
+                </div>
+                <div id="eq-mcq-area" style="${q.type === 'mcq' ? '' : 'display:none;'}">
+                    <div class="form-group" style="margin-bottom:0.5rem;">
+                        <label>Variantlar (vergul bilan ajrating)</label>
+                        <input type="text" id="eq-options" class="form-input" value="${_escAttr(mcqOptions)}">
+                    </div>
+                    <p style="font-size:0.85rem; color:var(--text-muted);">
+                        To'g'ri javob raqami (0 dan): <input type="number" id="eq-correct-index" style="width:60px; padding:4px 8px;" value="${mcqCorrect}" min="0">
+                    </p>
+                </div>
+                <div id="eq-fib-area" style="${q.type === 'fib' ? 'margin-top:1rem;' : 'display:none;'}">
+                    <div class="form-group">
+                        <label>To'g'ri javob</label>
+                        <input type="text" id="eq-fib-answer" class="form-input" value="${_escAttr(fibAnswer)}">
+                    </div>
+                </div>
+                <div style="display:flex; gap:1rem; justify-content:flex-end; margin-top:2rem;">
+                    <button class="primary-btn" style="background:var(--border); color:var(--text-main);" onclick="appNavigate('mustahkamlash')">Bekor qilish</button>
+                    <button class="primary-btn" onclick="window.saveQuestionEdit('${_esc(topicId)}',${qi})" style="padding:0.8rem 3rem; font-weight:700;">Saqlash ✅</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+window.openEditQuestion = openEditQuestion;
+
+function toggleEditQuizOptions(type) {
+    document.getElementById('eq-mcq-area').style.display = type === 'mcq' ? 'block' : 'none';
+    document.getElementById('eq-fib-area').style.display  = type === 'fib'  ? 'block' : 'none';
+}
+window.toggleEditQuizOptions = toggleEditQuizOptions;
+
+async function saveQuestionEdit(topicId, qi) {
+    const topic = state.topics.find(t => t.id === topicId);
+    if (!topic) return;
+    const type  = document.getElementById('eq-type').value;
+    const qText = document.getElementById('eq-question').value.trim();
+    if (!qText) return alert("Savol matnini kiriting!");
+
+    let updated;
+    if (type === 'mcq') {
+        const optionsText  = document.getElementById('eq-options').value;
+        const correctIndex = parseInt(document.getElementById('eq-correct-index').value);
+        if (!optionsText) return alert("Variantlarni kiriting!");
+        updated = { type: 'mcq', q: qText, options: optionsText.split(',').map(s => s.trim()), correct: correctIndex, difficulty: 'medium' };
+    } else {
+        const correct = document.getElementById('eq-fib-answer').value.trim();
+        if (!correct) return alert("To'g'ri javobni kiriting!");
+        updated = { type: 'fib', q: qText, correct, difficulty: 'medium' };
+    }
+
+    topic.quizzes[qi] = updated;
+    showLoading();
+    await saveData();
+    hideLoading();
+    renderMustahkamlash();
+    alert("Savol yangilandi! ✅");
+}
+window.saveQuestionEdit = saveQuestionEdit;
 
 // ─── Quiz preview (admin can test their own questions) ────────────────────
 

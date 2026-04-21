@@ -1,12 +1,12 @@
 'use client';
 import { AppUser } from '@/lib/types';
-import { supabase } from '@/lib/supabase';
+import { logout } from '@/lib/api';
 
 interface Props { user: AppUser; topicsCount: number; }
 
 export default function AdminProfile({ user, topicsCount }: Props) {
-  async function logout() {
-    await supabase.auth.signOut();
+  async function handleLogout() {
+    await logout();
     window.location.href = '/';
   }
 
@@ -19,12 +19,8 @@ export default function AdminProfile({ user, topicsCount }: Props) {
         <h2>{user.name}</h2>
         <p>{user.email}</p>
         <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
-          <span className="pill" style={{ background: 'rgba(255,255,255,0.2)', color: 'white' }}>
-            👨‍🏫 O&apos;qituvchi
-          </span>
-          <span className="pill" style={{ background: 'rgba(255,255,255,0.2)', color: 'white' }}>
-            ✅ Admin
-          </span>
+          <span className="pill" style={{ background: 'rgba(255,255,255,0.2)', color: 'white' }}>👨‍🏫 O&apos;qituvchi</span>
+          <span className="pill" style={{ background: 'rgba(255,255,255,0.2)', color: 'white' }}>✅ Admin</span>
         </div>
       </div>
 
@@ -39,9 +35,7 @@ export default function AdminProfile({ user, topicsCount }: Props) {
         <p className="text-muted" style={{ fontSize: '0.875rem', marginBottom: '1rem' }}>
           Hisobdan chiqish uchun quyidagi tugmani bosing.
         </p>
-        <button className="danger-btn" onClick={logout}>
-          🚪 Chiqish
-        </button>
+        <button className="danger-btn" onClick={handleLogout}>🚪 Chiqish</button>
       </div>
     </div>
   );

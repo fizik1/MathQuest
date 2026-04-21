@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { getLeaderboard } from '@/lib/api';
 import { AppUser } from '@/lib/types';
 
 interface Props { user: AppUser; }
@@ -11,11 +11,7 @@ export default function StudentLeaderboard({ user }: Props) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    supabase.from('student_progress')
-      .select('student_id, name, xp, level')
-      .order('xp', { ascending: false })
-      .limit(20)
-      .then(({ data }) => { setRows(data || []); setLoading(false); });
+    getLeaderboard().then(data => { setRows(data); setLoading(false); });
   }, []);
 
   const medals = ['🥇', '🥈', '🥉'];
@@ -38,12 +34,7 @@ export default function StudentLeaderboard({ user }: Props) {
         ) : (
           <table className="leaderboard-table">
             <thead>
-              <tr>
-                <th>#</th>
-                <th>O&apos;quvchi</th>
-                <th>XP</th>
-                <th>Daraja</th>
-              </tr>
+              <tr><th>#</th><th>O&apos;quvchi</th><th>XP</th><th>Daraja</th></tr>
             </thead>
             <tbody>
               {rows.map((row, i) => {
@@ -54,7 +45,7 @@ export default function StudentLeaderboard({ user }: Props) {
                       {medals[i] || i + 1}
                     </td>
                     <td>
-                      <span style={{ fontWeight: isMe ? 800 : 500 }}>{row.name || 'O\'quvchi'}</span>
+                      <span style={{ fontWeight: isMe ? 800 : 500 }}>{row.name || "O'quvchi"}</span>
                       {isMe && <span className="pill pill-primary" style={{ marginLeft: '0.5rem', fontSize: '0.7rem' }}>Siz</span>}
                     </td>
                     <td><span className="pill pill-primary">⚡ {row.xp}</span></td>

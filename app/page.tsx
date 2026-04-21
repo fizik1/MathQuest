@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { supabase } from '@/lib/supabase';
+import { getSession } from '@/lib/api';
 import LandingPage from '@/components/auth/LandingPage';
 
 export default function Home() {
@@ -9,11 +9,9 @@ export default function Home() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    getSession().then(session => {
       if (!session) { setReady(true); return; }
-      const { data: profile } = await supabase
-        .from('profiles').select('role').eq('id', session.user.id).single();
-      router.replace(profile?.role === 'admin' ? '/admin' : '/student');
+      router.replace(session.role === 'admin' ? '/admin' : '/student');
     });
   }, [router]);
 
